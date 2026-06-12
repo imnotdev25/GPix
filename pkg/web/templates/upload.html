@@ -1,0 +1,68 @@
+{{define "upload"}}{{template "layout" .}}{{end}}
+{{define "title"}}Upload · gpix{{end}}
+{{define "bodyclass"}}page-upload{{end}}
+{{define "content"}}
+<section class="page-heading">
+  <div>
+    <span class="eyebrow">Add to library</span>
+    <h1>Upload media</h1>
+    <p>Select photos, videos, or any other file. Non-media files are automatically disguised for storage.</p>
+  </div>
+</section>
+<section class="panel upload-panel">
+  <form id="upload-form" method="POST" action="/upload" enctype="multipart/form-data">
+    <input type="hidden" name="_csrf" value="{{.CSRF}}">
+    <label class="drop-zone" for="upload-files">
+      <span class="drop-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      </span>
+      <strong>Drop files here</strong>
+      <span>or click to browse from your device</span>
+      <span class="file-summary" id="file-summary" aria-live="polite">Multiple files supported · 5 GB max</span>
+      <input id="upload-files" type="file" name="files" multiple required>
+    </label>
+    <div class="upload-options">
+      <label class="field">
+        <span>Upload quality</span>
+        <select class="input" name="quality">
+          <option value="original">Original quality</option>
+          <option value="saver">Storage saver</option>
+          <option value="quota">Use quota</option>
+        </select>
+      </label>
+      <button class="btn btn-primary btn-large" type="submit">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+        <span>Start upload</span>
+      </button>
+    </div>
+  </form>
+</section>
+<div id="upload-status" role="status" aria-live="polite"></div>
+{{end}}
+{{define "scripts"}}
+<script>
+(function(){
+  var f=document.getElementById('upload-form'),st=document.getElementById('upload-status');
+  f.addEventListener('submit',function(e){
+    e.preventDefault();
+    var fd=new FormData(f),id=Math.random().toString(36).slice(2,12),submit=f.querySelector('[type="submit"]');
+    fd.append('upload_id',id);
+    submit.disabled=true;submit.classList.add('is-loading');
+    submit.querySelector('span').textContent='Uploading';
+    st.innerHTML='<div class="status-card"><span class="status-spinner"></span><div><strong>Preparing upload</strong><pre>Starting…</pre></div></div>';
+    var es=new EventSource('/api/upload-progress/'+id);
+    es.onmessage=function(ev){st.innerHTML='<div class="status-card"><span class="status-spinner"></span><div><strong>Uploading media</strong><pre>'+ev.data+'</pre></div></div>';};
+    es.addEventListener('done',function(){es.close();});
+    fetch('/upload',{method:'POST',body:fd}).then(r=>r.text()).then(t=>{
+      es.close();
+      st.innerHTML='<div class="status-card status-success"><span class="status-check">✓</span><div><strong>Upload complete</strong><pre>'+t+'</pre></div></div>';
+    }).catch(err=>{
+      es.close();
+      st.innerHTML='<div class="alert alert-error"><strong>Upload failed</strong><span>'+err+'</span></div>';
+    }).finally(function(){
+      submit.disabled=false;submit.classList.remove('is-loading');submit.querySelector('span').textContent='Start upload';
+    });
+  });
+})();
+</script>
+{{end}}

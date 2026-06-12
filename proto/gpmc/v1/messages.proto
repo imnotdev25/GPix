@@ -1,0 +1,146 @@
+syntax = "proto3";
+
+package gpmc.v1;
+
+option go_package = "gpix/pkg/gpmc/gpmcpb;gpmcpb";
+
+message GetUploadTokenRequest {
+  int32 f1 = 1;
+  int32 f2 = 2;
+  int32 f3 = 3;
+  int32 f4 = 4;
+  int64 file_size = 7;
+}
+
+message FindRemoteMediaByHashRequest {
+  message Inner {
+    message Hash { bytes sha1 = 1; }
+    message Empty {}
+    Hash hash = 1;
+    Empty marker = 2;
+  }
+  Inner inner = 1;
+}
+
+message FindRemoteMediaByHashResponse {
+  message L1 {
+    message L2 {
+      message L3 { string media_key = 1; }
+      L3 l3 = 2;
+    }
+    L2 l2 = 2;
+  }
+  L1 l1 = 1;
+}
+
+message UploadReceipt {
+  int64 field1 = 1;
+  bytes field2 = 2;
+}
+
+message CommitUploadRequest {
+  message Inner {
+    message Timestamp {
+      int64 t = 1;
+      int32 magic = 2;
+    }
+    UploadReceipt receipt = 1;
+    string filename = 2;
+    bytes sha1 = 3;
+    Timestamp ts = 4;
+    int32 quality = 7;
+    int32 marker = 10;
+  }
+  message Device {
+    string model = 3;
+    string make = 4;
+    int32 api_level = 5;
+  }
+  Inner inner = 1;
+  Device device = 2;
+  bytes trailer = 3;
+}
+
+message CommitUploadResponse {
+  message L1 {
+    message L3 { string media_key = 1; }
+    L3 l3 = 3;
+  }
+  L1 l1 = 1;
+}
+
+message PrepareDownloadRequest {
+  message KeyInner { string media_key = 1; }
+  message KeyOuter { KeyInner inner = 1; }
+  message Empty {}
+  message OpaqueF1Inner { Empty f2 = 2; }
+  message OpaqueF1 { OpaqueF1Inner f7 = 7; }
+  message OpaqueF5Inner5 { Empty f1 = 1; int32 f3 = 3; }
+  message OpaqueF5 { Empty f2 = 2; Empty f3 = 3; OpaqueF5Inner5 f5 = 5; }
+  message Opaque { OpaqueF1 f1 = 1; OpaqueF5 f5 = 5; }
+  KeyOuter key = 1;
+  Opaque opaque = 2;
+}
+
+message LibStateRequest {
+  message Inner {
+    string sync_token = 6;
+    int32 mode = 7;
+  }
+  Inner inner = 1;
+}
+
+message LibStateResponse {
+  message Body {
+    repeated MediaItem items = 2;
+    string sync_token = 6;
+  }
+  Body body = 1;
+}
+
+message MediaItem {
+  message Meta {
+    message Hashes {
+      bytes sha1 = 1;
+    }
+    string filename = 4;
+    int64 utc_timestamp_ms = 7;
+    int64 size_bytes = 10;
+    Hashes hashes = 13;
+    Trash trash = 16;
+  }
+  message Trash {
+    int64 trashed_at = 3;
+  }
+  message Kind {
+    int32 type = 1;
+    Photo photo = 2;
+    Video video = 3;
+  }
+  message Photo {}
+  message Video {}
+  string media_key = 1;
+  Meta meta = 2;
+  Kind kind = 5;
+}
+
+message PrepareDownloadResponse {
+  message L1 {
+    message L5 {
+      message Image {
+        string edited_url = 5;
+        string original_url = 6;
+      }
+      message Video {
+        string content_version = 1;
+        int32 kind = 3;
+        string download_url = 5;
+      }
+      int32 media_type = 1;
+      Image image = 2;
+      Video video = 3;
+    }
+    L5 l5 = 5;
+  }
+  L1 l1 = 1;
+}

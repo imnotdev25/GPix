@@ -1,0 +1,48 @@
+# Binaries and build output
+/bin/
+*.exe
+*.test
+*.out
+*.dll
+*.so
+*.dylib
+
+# Secrets and runtime state
+.env
+.env.*
+!.env.example
+secret.key
+*.session
+*.session.bak
+cache_*.db
+debug.log
+*.log
+
+# Local config (provide a *.example template instead)
+gpix-web.conf
+!gpix-web.conf.example
+
+# Backups and temp
+*.bak
+*.tmp
+*~
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Go
+*.coverprofile
+coverage.out
+vendor/
+
+# Scratch files at repo root
+/test.jpg
+/test*.jpg
+/go-test*.jpg
+/*.mp4
+/libstate*.bin

@@ -1,0 +1,37 @@
+{{define "login"}}{{template "layout" .}}{{end}}
+{{define "title"}}Sign in · gpix{{end}}
+{{define "bodyclass"}}page-login{{end}}
+{{define "content"}}
+<div class="login-shell">
+  <section class="login-intro">
+    <div class="brand brand-large">
+      <span class="brand-mark" aria-hidden="true">g</span>
+      <span class="brand-copy">
+        <strong>gpix</strong>
+        <small>Media server</small>
+      </span>
+    </div>
+    <h1>Your media.<br>On your terms.</h1>
+    <p>A private home for your photo and video library, hosted on your own infrastructure.</p>
+  </section>
+  <section class="login-card" aria-labelledby="login-title">
+    <div class="login-card-heading">
+      <span class="eyebrow">Welcome back</span>
+      <h2 id="login-title">Sign in to gpix</h2>
+      <p>Enter your account details to continue.</p>
+    </div>
+    {{if .Error}}<div class="alert alert-error" role="alert"><strong>Unable to sign in</strong><span>{{.Error}}</span></div>{{end}}
+    <form method="POST" action="/login">
+      <label class="field">
+        <span>Username</span>
+        <input class="input" type="text" name="u" autocomplete="username" autofocus required>
+      </label>
+      <label class="field">
+        <span>Password</span>
+        <input class="input" type="password" name="p" autocomplete="current-password" required>
+      </label>
+      <button class="btn btn-primary btn-large btn-block" type="submit">Sign in</button>
+    </form>
+  </section>
+</div>
+{{end}}

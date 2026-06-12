@@ -1,0 +1,193 @@
+{{define "view"}}{{template "layout" .}}{{end}}
+{{define "title"}}{{.Filename}} · gpix{{end}}
+{{define "bodyclass"}}page-view{{end}}
+{{define "head"}}{{if .IsVideo}}<link rel="stylesheet" href="/static/plyr.css">{{end}}{{end}}
+{{define "content"}}
+<a class="back-link" href="/browse">
+  <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+  Library
+</a>
+<div class="detail-layout">
+  <div class="media-column">
+    <section class="media-stage" aria-label="Media preview">
+      {{if .IsDisguised}}
+      <div class="file-stage">
+        <div class="file-stage-icon">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <span class="file-stage-ext">{{fileExt .OriginalName}}</span>
+        </div>
+        <h2 class="file-stage-name">{{.OriginalName}}</h2>
+        <p class="file-stage-kind">{{.DisplayKind}}</p>
+        <p class="file-stage-note">Stored disguised as a video. Download to recover the original file.</p>
+      </div>
+      {{else if .IsVideo}}
+      <div class="player-shell"><video id="player" controls playsinline preload="metadata"></video></div>
+      {{if .HasQualities}}
+      <div class="quality-bar">
+        <span class="quality-bar-label">Quality</span>
+        <div class="quality-chips" id="quality-chips" role="group" aria-label="Playback quality">
+          <button class="quality-chip active" type="button" data-level="-1" aria-pressed="true">Auto</button>
+          {{range .Qualities}}<button class="quality-chip" type="button" data-level="{{.Index}}" aria-pressed="false">{{.Label}}</button>{{end}}
+        </div>
+      </div>
+      {{end}}
+      {{else}}
+      <img src="/raw/{{.RawToken}}" alt="{{.Filename}}">
+      {{end}}
+    </section>
+    <section class="file-details" aria-labelledby="file-details-title">
+      <div class="section-heading">
+        <h2 id="file-details-title">File details</h2>
+        <p>Metadata reported by the library.</p>
+      </div>
+      <dl class="metadata-grid">
+        <div><dt>Name</dt><dd>{{.Filename}}</dd></div>
+        <div><dt>Kind</dt><dd>{{if .DisplayKind}}{{.DisplayKind}}{{else if .IsVideo}}Video{{else}}Photo{{end}}{{if .IsDisguised}} <span class="badge-inline">disguised</span>{{end}}</dd></div>
+        <div><dt>Size</dt><dd>{{fmtBytes .SizeBytes}}</dd></div>
+        <div><dt>Date</dt><dd>{{fmtDate .Mtime}}</dd></div>
+        <div class="metadata-wide"><dt>Media key</dt><dd class="mono-value">{{.MediaKey}}</dd></div>
+        {{if and .IsVideo .HasQualities}}
+        <div class="metadata-wide"><dt>Renditions</dt><dd>{{range $i,$q:=.Qualities}}{{if $i}}, {{end}}{{.Label}}{{end}}</dd></div>
+        {{end}}
+      </dl>
+    </section>
+  </div>
+  <aside class="detail-sidebar">
+    <div class="detail-heading">
+      <span class="eyebrow">{{if .DisplayKind}}{{.DisplayKind}}{{else if .IsVideo}}Video{{else}}Photo{{end}}</span>
+      <h1>{{if .IsDisguised}}{{.OriginalName}}{{else}}{{.Filename}}{{end}}</h1>
+      <div class="metadata">
+        <span>{{fmtDate .Mtime}}</span>
+        <span aria-hidden="true">·</span>
+        <span>{{fmtBytes .SizeBytes}}</span>
+      </div>
+    </div>
+    <div class="detail-actions">
+      <a class="btn btn-primary btn-large" href="/raw/{{.RawToken}}" download="{{if .IsDisguised}}{{.OriginalName}}{{else}}{{.Filename}}{{end}}">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download
+      </a>
+      <button class="btn btn-danger btn-large" id="delete-btn" data-key="{{.MediaKey}}" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
+        Delete
+      </button>
+    </div>
+    {{if and .IsVideo (not .IsDisguised)}}
+    <section class="stream-section">
+      <div class="section-heading">
+        <h2>Stream URLs</h2>
+        <p>Open in VLC or another external player.</p>
+      </div>
+      <ul class="url-list">
+        <li class="url-row">
+          <div class="url-details">
+            <span class="url-tag">Auto</span>
+            <span class="url-text" title="{{.AbsStreamURL}}">{{.AbsStreamURL}}</span>
+          </div>
+          <button class="url-copy" type="button" data-url="{{.AbsStreamURL}}" aria-label="Copy auto stream URL">Copy</button>
+        </li>
+        {{range .Qualities}}
+        <li class="url-row">
+          <div class="url-details">
+            <span class="url-tag">{{.Label}}</span>
+            <span class="url-text" title="{{.AbsStreamURL}}">{{.AbsStreamURL}}</span>
+          </div>
+          <button class="url-copy" type="button" data-url="{{.AbsStreamURL}}" aria-label="Copy {{.Label}} stream URL">Copy</button>
+        </li>
+        {{end}}
+      </ul>
+    </section>
+    {{end}}
+  </aside>
+</div>
+{{end}}
+{{define "scripts"}}
+{{if and .IsVideo (not .IsDisguised)}}
+<script src="/static/hls.min.js"></script>
+<script src="/static/plyr.min.js"></script>
+<script>
+(function(){
+  var v=document.getElementById('player'),autoSrc={{.StreamURL}};
+  var levelUrls={{.LevelURLsJSON}};
+  var chips=document.querySelectorAll('.quality-chip');
+  var currentHls=null,nativeMode=v.canPlayType('application/vnd.apple.mpegurl')!=='';
+  var plyr=new Plyr(v,{
+    controls:['play-large','play','progress','current-time','duration','mute','volume','settings','pip','airplay','fullscreen'],
+    settings:['speed'],
+    autoplay:false,
+    ratio:'16:9'
+  });
+  function load(level){
+    var src=String(level)==='-1'?autoSrc:levelUrls[String(level)];
+    if(!src)return;
+    var wasPlaying=!v.paused,t=v.currentTime||0;
+    if(currentHls){currentHls.destroy();currentHls=null;}
+    if(nativeMode){
+      v.src=src;
+    }else if(window.Hls&&Hls.isSupported()){
+      var h=new Hls({capLevelToPlayerSize:false,abrEwmaDefaultEstimate:10000000});
+      h.loadSource(src);h.attachMedia(v);
+      h.on(Hls.Events.MANIFEST_PARSED,function(_,d){
+        if(String(level)==='-1'){
+          var hLevels=d.levels.map(function(l,i){return {bw:l.bitrate,i:i};});
+          hLevels.sort(function(a,b){return b.bw-a.bw;});
+          h.currentLevel=hLevels[0].i;
+        }
+      });
+      h.on(Hls.Events.ERROR,function(_,d){console.error('[hls]',d.type,d.details);});
+      currentHls=h;
+    }else{
+      v.src=src;
+    }
+    if(t>0){
+      v.addEventListener('loadedmetadata',function once(){v.currentTime=t;v.removeEventListener('loadedmetadata',once);});
+    }
+    if(wasPlaying){v.play().catch(function(){});}
+  }
+  chips.forEach(function(c){
+    c.addEventListener('click',function(){
+      chips.forEach(function(x){x.classList.remove('active');x.setAttribute('aria-pressed','false');});
+      c.classList.add('active');c.setAttribute('aria-pressed','true');
+      load(c.dataset.level);
+    });
+  });
+  load(-1);
+})();
+</script>
+{{end}}
+<script>
+document.querySelectorAll('.url-copy').forEach(function(b){
+  b.addEventListener('click',function(){
+    navigator.clipboard.writeText(b.dataset.url).then(function(){
+      b.classList.add('copied');
+      var orig=b.textContent;b.textContent='Copied';
+      setTimeout(function(){b.textContent=orig;b.classList.remove('copied');},1500);
+    });
+  });
+});
+(function(){
+  var btn=document.getElementById('delete-btn');
+  if(!btn)return;
+  btn.addEventListener('click',function(){
+    if(!confirm('Move this item to the Google Photos trash?\n\nIt can be restored from photos.google.com within 60 days.'))return;
+    var origLabel=btn.innerHTML;
+    btn.disabled=true;btn.textContent='Deleting…';
+    fetch('/delete/'+encodeURIComponent(btn.dataset.key),{method:'POST',credentials:'same-origin'})
+      .then(function(r){return r.text().then(function(t){return {ok:r.ok,text:t};});})
+      .then(function(res){
+        if(res.ok){
+          btn.textContent='Deleted · returning to library';
+          setTimeout(function(){window.location.href='/browse';},900);
+        }else{
+          alert('Delete failed: '+res.text);
+          btn.disabled=false;btn.innerHTML=origLabel;
+        }
+      })
+      .catch(function(err){
+        alert('Delete failed: '+err);
+        btn.disabled=false;btn.innerHTML=origLabel;
+      });
+  });
+})();
+</script>
+{{end}}

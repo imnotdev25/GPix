@@ -1,0 +1,65 @@
+{{define "browse"}}{{template "layout" .}}{{end}}
+{{define "title"}}Library · gpix{{end}}
+{{define "bodyclass"}}page-library{{end}}
+{{define "content"}}
+<section class="page-heading">
+  <div>
+    <span class="eyebrow">Your collection</span>
+    <h1>Media library</h1>
+    <p>Browse photos, videos, and disguised files stored on this server.</p>
+  </div>
+  {{if .NextCursor}}
+  <div class="page-actions">
+    <a class="btn" href="/browse?cursor={{.NextCursor}}">
+      <span>Next page</span>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+    </a>
+  </div>
+  {{end}}
+</section>
+{{if not .Items}}
+<section class="empty-state">
+  <div class="empty-icon" aria-hidden="true">
+    <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
+  </div>
+  <h2>Your library is empty</h2>
+  <p>Upload photos or videos to start building your collection.</p>
+  <a class="btn btn-primary" href="/upload">Upload media</a>
+</section>
+{{else}}
+<section class="media-grid" aria-label="Media library">
+  {{range .Items}}
+  <a class="media-card{{if .IsDisguised}} media-card-file{{end}}" href="/view/{{.MediaKey}}" title="{{.DisplayName}}">
+    <div class="media-card-thumb">
+      {{if .IsDisguised}}
+      <div class="file-thumb">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <span class="file-ext">{{fileExt .DisplayName}}</span>
+      </div>
+      <span class="media-type media-type-file">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+        {{.DisplayKind}}
+      </span>
+      {{else}}
+      <img loading="lazy" src="/thumb/{{.MediaKey}}?size=512" alt="{{.DisplayName}}">
+      {{if eq .Kind 2}}
+      <span class="media-type">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        Video
+      </span>
+      {{end}}
+      {{end}}
+    </div>
+    <div class="media-card-body">
+      <h2>{{.DisplayName}}</h2>
+      <p>
+        <span>{{fmtDate .Mtime}}</span>
+        <span aria-hidden="true">·</span>
+        <span>{{fmtBytes .SizeBytes}}</span>
+      </p>
+    </div>
+  </a>
+  {{end}}
+</section>
+{{end}}
+{{end}}

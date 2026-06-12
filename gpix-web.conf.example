@@ -1,0 +1,11 @@
+# gpix web UI config.
+# Copy this file to gpix-web.conf and fill in the values.
+# The bcrypt password hash can be generated with:  go run . -hashpw
+
+listen = 127.0.0.1:8080
+username = your-username
+password_hash = $2a$12$replace_with_output_of__go_run_._-hashpw
+device_profile = pixel-xl
+max_concurrent_uploads = 2
+session_days = 30
+stream_token_ttl_minutes = 60
