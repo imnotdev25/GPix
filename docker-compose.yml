@@ -1,0 +1,21 @@
+services:
+  gpix:
+    build: .
+    # Or use a prebuilt image instead of building:
+    # image: gpix:latest
+    container_name: gpix
+    restart: unless-stopped
+    ports:
+      - "8080:8080"   # web UI
+      - "9000:9000"   # S3-compatible gateway
+      - "8081:8081"   # WebDAV gateway
+    volumes:
+      # ./data must contain gpix-web.conf (and .env, unless you pass env vars
+      # below). secret.key and gateways.json are created here on first run.
+      - ./data:/data
+    environment:
+      - TZ=UTC
+      # Either keep GP_AUTH_DATA in ./data/.env, or uncomment and set it here:
+      # - GP_AUTH_DATA=androidId=...&Token=aas_et/...
+    # Run web + Telegram bot together instead of web only:
+    # command: ["-mode", "all"]

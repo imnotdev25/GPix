@@ -38,7 +38,7 @@ func (s *Server) loadTemplates() error {
 			return string(out)
 		},
 	}
-	pages := []string{"login", "browse", "view", "upload", "error"}
+	pages := []string{"login", "browse", "view", "upload", "error", "gateways"}
 	s.pageTmpls = make(map[string]*template.Template, len(pages))
 	layout, err := tmplFS.ReadFile("templates/layout.html")
 	if err != nil {
@@ -82,6 +82,30 @@ type pageData struct {
 	AbsStreamURL string
 	Qualities    []qualityChoice
 	HasQualities bool
+
+	Gateways *gatewaysView
+}
+
+// gatewaysView models the Connections settings page.
+type gatewaysView struct {
+	S3Enabled   bool
+	S3Endpoint  string
+	S3Region    string
+	S3Bucket    string
+	S3AccessKey string
+	S3SecretKey string
+	HasS3Keys   bool
+
+	WebDAVEnabled  bool
+	WebDAVEndpoint string
+	WebDAVUsername string
+	WebDAVPassword string
+	HasWebDAVPass  bool
+
+	// JustGenerated is "s3" or "webdav" right after a regenerate, so the page
+	// can reveal the new secret with a "save this now" prompt. Empty otherwise.
+	JustGenerated string
+	Notice        string
 }
 
 type qualityChoice struct {
@@ -124,14 +148,14 @@ func (p pageData) LevelURLsJSON() template.JS {
 }
 
 type listingItem struct {
-	MediaKey     string
-	Filename     string
-	DisplayName  string
-	Kind         int
-	IsDisguised  bool
-	DisplayKind  string
-	SizeBytes    int64
-	Mtime        time.Time
+	MediaKey    string
+	Filename    string
+	DisplayName string
+	Kind        int
+	IsDisguised bool
+	DisplayKind string
+	SizeBytes   int64
+	Mtime       time.Time
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data pageData) {

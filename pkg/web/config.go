@@ -18,15 +18,30 @@ type Config struct {
 	SessionDays          int
 	StreamTokenTTLMin    int
 	SecretKey            []byte
+
+	// S3-compatible gateway (optional). Enabled when S3Listen is non-empty.
+	S3Listen    string
+	S3AccessKey string
+	S3SecretKey string
+	S3Bucket    string
+	S3Region    string
+
+	// WebDAV gateway (optional). Enabled when WebDAVListen is non-empty.
+	// Authenticates against Username/PasswordHash above.
+	WebDAVListen   string
+	WebDAVBasePath string
 }
 
 func LoadConfig(path string) (Config, error) {
 	cfg := Config{
-		Listen:               "127.0.0.1:8080",
+		Listen:               "0.0.0.0:8080",
 		DeviceProfile:        "pixel-xl",
 		MaxConcurrentUploads: 2,
 		SessionDays:          30,
 		StreamTokenTTLMin:    60,
+		S3Bucket:             "gpix",
+		S3Region:             "us-east-1",
+		WebDAVBasePath:       "/",
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -68,6 +83,26 @@ func LoadConfig(path string) (Config, error) {
 			n, _ := strconv.Atoi(v)
 			if n > 0 {
 				cfg.StreamTokenTTLMin = n
+			}
+		case "s3_listen":
+			cfg.S3Listen = v
+		case "s3_access_key":
+			cfg.S3AccessKey = v
+		case "s3_secret_key":
+			cfg.S3SecretKey = v
+		case "s3_bucket":
+			if v != "" {
+				cfg.S3Bucket = v
+			}
+		case "s3_region":
+			if v != "" {
+				cfg.S3Region = v
+			}
+		case "webdav_listen":
+			cfg.WebDAVListen = v
+		case "webdav_base_path":
+			if v != "" {
+				cfg.WebDAVBasePath = v
 			}
 		}
 	}

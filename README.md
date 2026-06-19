@@ -2,9 +2,11 @@
 
 Your Google Photos library, on your terms.
 
-gpix is a self-hosted Google Photos client written in Go. One binary, four ways to use it:
+gpix is a self-hosted Google Photos client written in Go. One binary, several ways to use it:
 
 - **Web UI** — browse, view, stream videos with seek, upload from your browser, delete items. Minimalist black-and-white design, dark/light theme, fully responsive. All assets embedded.
+- **S3-compatible gateway** — point `aws`, `mc`, `boto3`, `rclone`, or any S3 client at your library. AWS Signature V4 auth, keys generated and rotated from the web UI.
+- **WebDAV gateway** — mount your library in Finder, Windows Explorer, or `rclone`. Basic auth with your login password or a revocable app password.
 - **CLI** — upload files or whole folders from the terminal.
 - **Telegram bot** — `/upload`, `/get`, `/list`, `/info` against your library from any chat.
 - **Universal file storage** — PDFs, archives, executables, any file gets transparently wrapped as a 1-second MP4 with the original bytes preserved. Uploaded as a "video", recovered byte-identical on download. Effectively unlimited cloud storage for arbitrary files.
@@ -53,7 +55,7 @@ go run . -cli ./photos          # CLI uploader
 go run . -hashpw                # generate a bcrypt password hash
 ```
 
-Web UI default: `http://127.0.0.1:8080`.
+Web UI default: binds `0.0.0.0:8080`, reachable at `http://<your-host>:8080` (or `http://localhost:8080` on the same machine).
 
 ---
 
@@ -112,7 +114,7 @@ cp gpix-web.conf.example gpix-web.conf
 Config:
 
 ```toml
-listen = 127.0.0.1:8080
+listen = 0.0.0.0:8080
 username = you
 password_hash = $2a$12$replace_me
 device_profile = pixel-xl
@@ -134,6 +136,93 @@ On first run gpix generates a 32-byte `secret.key` next to the config (used to s
 - **Disguised files** show with file icon + extension badge instead of a video player
 
 Single-user. Sign in once, session lasts 30 days by default.
+
+---
+
+## Gateways: S3 & WebDAV
+
+gpix can expose the same library — including disguised non-media files — over two standard protocols, each on its own port, running alongside the web UI. Uploads still go through the original-quality Pixel path, and downloads transparently un-disguise wrapped files. The mapping is flat: one bucket / one root collection of objects keyed by filename.
+
+### Turn it on
+
+Both gateways are **off by default**. Enable the ones you want by adding a `*_listen` line to `gpix-web.conf` and restarting gpix:
+
+```toml
+# gpix-web.conf
+s3_listen     = 0.0.0.0:9000     # S3 API on :9000 (all interfaces)
+s3_bucket     = gpix             # cosmetic; default "gpix"
+s3_region     = us-east-1        # cosmetic; any signed region is accepted
+
+webdav_listen = 0.0.0.0:8081     # WebDAV on :8081 (all interfaces)
+```
+
+Use `127.0.0.1` instead of `0.0.0.0` if you want an endpoint reachable only from the same machine.
+
+That's it — no credentials needed in the config file. Run gpix as usual:
+
+```bash
+go run . -mode web      # or -mode all
+```
+
+> **Network exposure.** Binding to `0.0.0.0` (the default here) listens on every interface, so the ports are reachable from your whole LAN — anyone who can route to the host can hit them. SigV4 (S3) and Basic auth (WebDAV) gate access, but the traffic itself is **plain HTTP with no transport encryption**. For anything beyond a trusted local network, put gpix behind a reverse proxy with TLS, restrict with a firewall, or use an SSH tunnel and bind to `127.0.0.1` instead.
+
+### Generate & save credentials (web UI)
+
+Open the web UI → **Connections** (top nav). For each gateway you'll see its endpoint URL and controls to mint credentials:
+
+- **S3** — click **Generate keys**. gpix creates an **Access Key ID** (public, like `GPIX…`) and a **Secret Access Key**. Use **Show** to reveal the secret and **Copy** to grab it. The secret is shown masked by default; **save it in your client now**. **Regenerate** rotates the pair (old keys stop working instantly); **Clear** disables S3 auth entirely.
+- **WebDAV** — your normal login username/password always works. Optionally click **Generate app password** to mint a separate, revocable password you can paste into a client without exposing your main one.
+
+Credentials are stored in `gateways.json` next to `secret.key` (file mode `0600`, git-ignored). Rotating a key in the UI takes effect immediately — no restart.
+
+### Use it — S3
+
+```bash
+export AWS_ACCESS_KEY_ID=GPIX...           # from the Connections page
+export AWS_SECRET_ACCESS_KEY=...           # the secret you copied
+
+aws --endpoint-url http://127.0.0.1:9000 s3 ls s3://gpix/
+aws --endpoint-url http://127.0.0.1:9000 s3 cp ./report.pdf s3://gpix/
+aws --endpoint-url http://127.0.0.1:9000 s3 cp s3://gpix/report.pdf ./out.pdf
+aws --endpoint-url http://127.0.0.1:9000 s3 rm s3://gpix/report.pdf
+```
+
+Works the same with `mc` (MinIO client), `s3cmd`, `boto3`, or `rclone`'s S3 backend. Supported operations: list buckets, list objects (v1 & v2, with `prefix`/`delimiter`), HEAD/GET (incl. `Range`), PUT, DELETE, and batch delete. Multipart upload, ACLs, versioning, and tagging are **not** implemented, so configure clients for single-part puts (`boto3`: a large `multipart_threshold`).
+
+### Use it — WebDAV
+
+```bash
+# rclone
+rclone config create gpix webdav url http://127.0.0.1:8081 vendor other \
+  user your-username pass <app-password-or-login-password>
+rclone ls gpix:
+rclone copy ./report.pdf gpix:
+
+# curl
+curl -u your-username:<password> -T report.pdf http://127.0.0.1:8081/report.pdf
+curl -u your-username:<password> http://127.0.0.1:8081/report.pdf -o out.pdf
+```
+
+**Finder (macOS):** *Go → Connect to Server* → `http://127.0.0.1:8081`.
+**Windows:** *Map network drive* → same URL.
+
+> **Heads-up on duplicates.** Google Photos allows multiple items with the same filename; the gateways expose only the newest one per name. Treat object keys as filenames, and prefer unique names when uploading.
+
+### Testing the gateways
+
+The protocol layers run against any `store.Backend`. A standalone harness wires them to an **in-memory** backend so you can test with real clients without touching Google Photos:
+
+```bash
+# S3 + WebDAV on an in-memory store, no Google auth required
+go run ./cmd/gpix-gateway-test \
+  -s3 127.0.0.1:9000 -dav 127.0.0.1:8081 \
+  -access test -secret testsecret -bucket gpix -user gpix -pass gpix
+
+# In another shell:
+go test ./pkg/s3/...                       # SigV4 unit tests (AWS test vectors)
+pip install boto3 && python3 test/s3_smoke.py
+./test/webdav_smoke.sh
+```
 
 ---
 
@@ -226,12 +315,32 @@ Fully static, ~25 MB stripped. Drop the binary on any Linux box with `.env` and 
 
 ---
 
+## Docker
+
+A multi-stage `Dockerfile` builds a static binary into a minimal Alpine image (web assets are embedded, so only CA certs are added). All runtime state — `gpix-web.conf`, `.env`, `secret.key`, `gateways.json` — lives in `/data`, which you mount.
+
+```bash
+# Put your config and auth in ./data first:
+mkdir -p data
+cp gpix-web.conf.example data/gpix-web.conf   # then edit it
+printf 'GP_AUTH_DATA=androidId=...&Token=aas_et/...\n' > data/.env
+
+# Build and run
+docker build -t gpix .
+docker run --rm -p 8080:8080 -p 9000:9000 -p 8081:8081 \
+  -v "$PWD/data:/data" gpix
+```
+
+Or with Compose (`docker compose up -d` — see `docker-compose.yml`). The image listens on `8080` (web), `9000` (S3), and `8081` (WebDAV); with `0.0.0.0` listen addresses in the config, publishing the ports exposes them on your host. It runs as a non-root user, so make sure the mounted `./data` directory is writable by UID `10001` (or add `--user "$(id -u):$(id -g)"`). Default `CMD` runs web only; use `-mode all` to add the Telegram bot.
+
+---
+
 ## Trust model
 
 - **Your photos stay in your Google account.** If you stop using gpix tomorrow, everything is still there in the regular Google Photos app/web.
 - **No third party.** The binary talks directly to Google. No relay servers, no analytics, no telemetry.
 - **Auth tokens stay local.** `GP_AUTH_DATA` lives in `.env` on your machine and never leaves it except to authenticate to Google.
-- **Web UI is single-user.** Bind to `127.0.0.1` (default) or put it behind a reverse proxy with TLS if you want remote access.
+- **Web UI is single-user.** The default config binds `0.0.0.0` (all interfaces) for convenience. Switch to `127.0.0.1` to keep it local, or put it behind a reverse proxy with TLS for remote access. The S3 and WebDAV gateways follow the same rule — see the network-exposure note above.
 
 ---
 

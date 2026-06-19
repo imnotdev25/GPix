@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"gpix/pkg/gpmc"
+	"gpix/pkg/gwcreds"
 )
 
 //go:embed templates/*.html templates/partials/*.html
@@ -24,6 +25,7 @@ var staticFS embed.FS
 type Server struct {
 	cfg            Config
 	gp             *gpmc.Client
+	gw             *gwcreds.Store
 	log            *slog.Logger
 	httpSrv        *http.Server
 	urlCache       *urlCache
@@ -34,7 +36,9 @@ type Server struct {
 	pageTmpls      map[string]*template.Template
 }
 
-func New(cfg Config, gp *gpmc.Client, log *slog.Logger) (*Server, error) {
+// New builds the web server. gw is the shared gateway-credentials store used by
+// the connections settings page; it may be nil to disable that page.
+func New(cfg Config, gp *gpmc.Client, gw *gwcreds.Store, log *slog.Logger) (*Server, error) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -44,6 +48,7 @@ func New(cfg Config, gp *gpmc.Client, log *slog.Logger) (*Server, error) {
 	s := &Server{
 		cfg:            cfg,
 		gp:             gp,
+		gw:             gw,
 		log:            log,
 		urlCache:       newURLCache(gp),
 		progressBus:    newProgressBus(),

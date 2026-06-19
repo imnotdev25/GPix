@@ -2,10 +2,28 @@
 # Copy this file to gpix-web.conf and fill in the values.
 # The bcrypt password hash can be generated with:  go run . -hashpw
 
-listen = 127.0.0.1:8080
+listen = 0.0.0.0:8080
 username = your-username
 password_hash = $2a$12$replace_with_output_of__go_run_._-hashpw
 device_profile = pixel-xl
 max_concurrent_uploads = 2
 session_days = 30
 stream_token_ttl_minutes = 60
+
+# ---- S3-compatible gateway (optional) ----
+# Uncomment s3_listen to expose your library over an S3 API on its own port.
+# Generate the access key + secret from the web UI (Connections page) — you do
+# NOT need to put them here. If you do set them, they seed the store on first
+# run. Bucket/region are cosmetic; any region your client signs with is accepted.
+# s3_listen = 0.0.0.0:9000
+# s3_bucket = gpix
+# s3_region = us-east-1
+# s3_access_key =
+# s3_secret_key =
+
+# ---- WebDAV gateway (optional) ----
+# Uncomment webdav_listen to expose your library over WebDAV on its own port.
+# Authenticates with the username above and either your login password or the
+# revocable app password you generate on the Connections page.
+# webdav_listen = 0.0.0.0:8081
+# webdav_base_path = /

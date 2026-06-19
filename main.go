@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"errors"
 	"flag"
 	"fmt"
@@ -17,7 +19,11 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"gpix/pkg/bridge"
+	"gpix/pkg/dav"
 	"gpix/pkg/gpmc"
+	"gpix/pkg/gwcreds"
+	"gpix/pkg/s3"
+	"gpix/pkg/store/gpmcstore"
 	"gpix/pkg/web"
 )
 
@@ -178,6 +184,17 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 	}
 	cfg.SecretKey = secret
 
+	// Gateway credentials (S3 keys + WebDAV app password) live next to secret.key
+	// and are managed from the web UI. Seed them from any values in the config.
+	gwPath := filepath.Join(filepath.Dir(secretPath), "gateways.json")
+	gw, err := gwcreds.Load(gwPath)
+	if err != nil {
+		return fmt.Errorf("gateway credentials: %w", err)
+	}
+	if err := gw.Seed(cfg.S3AccessKey, cfg.S3SecretKey, ""); err != nil {
+		return fmt.Errorf("seed gateway credentials: %w", err)
+	}
+
 	profileName := coalesce(profileFlag, cfg.DeviceProfile, "pixel-xl")
 	profile, err := parseProfile(profileName)
 	if err != nil {
@@ -189,7 +206,7 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 		return fmt.Errorf("gpmc.New: %w", err)
 	}
 
-	srv, err := web.New(cfg, gp, log)
+	srv, err := web.New(cfg, gp, gw, log)
 	if err != nil {
 		return fmt.Errorf("web.New: %w", err)
 	}
@@ -200,7 +217,111 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 		"profile", profileName,
 		"secret_path", secretPath,
 	)
-	return srv.Run(ctx)
+
+	// All gateways share one Google-Photos-backed object store.
+	be := gpmcstore.New(gp, gpmcstore.Options{TempDir: cfg.TempDir})
+
+	runners := []func(context.Context) error{srv.Run}
+
+	if cfg.S3Listen != "" {
+		// Credentials resolve through the shared store, so keys generated in the
+		// web UI take effect immediately without a restart.
+		s3srv, err := s3.New(s3.Config{
+			Listen:      cfg.S3Listen,
+			Bucket:      cfg.S3Bucket,
+			Region:      cfg.S3Region,
+			Credentials: gw,
+		}, be, log.With("service", "s3"))
+		if err != nil {
+			return fmt.Errorf("s3.New: %w", err)
+		}
+		log.Info("gpix s3 gateway started", "listen", cfg.S3Listen, "bucket", cfg.S3Bucket)
+		runners = append(runners, s3srv.Run)
+	}
+
+	if cfg.WebDAVListen != "" {
+		davsrv, err := dav.New(dav.Config{
+			Listen:   cfg.WebDAVListen,
+			BasePath: cfg.WebDAVBasePath,
+			Realm:    "gpix",
+		}, be, basicAuthChecker(cfg.Username, cfg.PasswordHash, gw), log.With("service", "webdav"))
+		if err != nil {
+			return fmt.Errorf("dav.New: %w", err)
+		}
+		log.Info("gpix webdav gateway started", "listen", cfg.WebDAVListen, "base", cfg.WebDAVBasePath)
+		runners = append(runners, davsrv.Run)
+	}
+
+	return runConcurrently(ctx, runners)
+}
+
+// runConcurrently runs every runner until ctx is cancelled or one of them
+// returns an error, in which case the others are signalled to stop.
+func runConcurrently(ctx context.Context, runners []func(context.Context) error) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errCh := make(chan error, len(runners))
+	var wg sync.WaitGroup
+	for _, run := range runners {
+		run := run
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := run(ctx); err != nil {
+				errCh <- err
+				cancel()
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for e := range errCh {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+// basicAuthChecker returns a dav.Authenticator validating the WebDAV username
+// against either the main bcrypt login password or the optional, revocable app
+// password from the gateway store. Successful (username,password) pairs are
+// cached by a SHA-256 fingerprint so bcrypt runs at most once per distinct
+// password — WebDAV clients issue many requests per session.
+func basicAuthChecker(username, passwordHash string, gw *gwcreds.Store) dav.Authenticator {
+	var (
+		mu        sync.RWMutex
+		goodPrint [32]byte
+		haveGood  bool
+	)
+	fingerprint := func(user, pass string) [32]byte {
+		return sha256.Sum256([]byte(user + "\x00" + pass))
+	}
+	return func(user, pass string) bool {
+		if subtle.ConstantTimeCompare([]byte(user), []byte(username)) != 1 {
+			return false
+		}
+		// App password (cheap, constant-time) takes the fast path.
+		if gw != nil && gw.CheckWebDAVPassword(pass) {
+			return true
+		}
+		fp := fingerprint(user, pass)
+		mu.RLock()
+		cached := haveGood && subtle.ConstantTimeCompare(goodPrint[:], fp[:]) == 1
+		mu.RUnlock()
+		if cached {
+			return true
+		}
+		if bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(pass)) != nil {
+			return false
+		}
+		mu.Lock()
+		goodPrint = fp
+		haveGood = true
+		mu.Unlock()
+		return true
+	}
 }
 
 func runCLI(authFlag, profileFlag, qualityFlag string, conc int, recursive, force, deleteAfter bool) {

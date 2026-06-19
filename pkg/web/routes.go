@@ -23,6 +23,10 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /delete/{key}", s.requireSession(s.handleDelete))
 	mux.HandleFunc("GET /api/upload-progress/{id}", s.requireSession(s.handleProgressSSE))
 
+	mux.HandleFunc("GET /settings/gateways", s.requireSession(s.handleGateways))
+	mux.HandleFunc("POST /settings/gateways/regenerate", s.requireSession(s.handleGatewaysRegenerate))
+	mux.HandleFunc("POST /settings/gateways/clear", s.requireSession(s.handleGatewaysClear))
+
 	mux.HandleFunc("GET /stream/{token}", s.handleStream)
 	mux.HandleFunc("GET /raw/{token}", s.handleRaw)
 

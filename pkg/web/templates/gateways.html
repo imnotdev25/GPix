@@ -1,0 +1,167 @@
+{{define "gateways"}}{{template "layout" .}}{{end}}
+{{define "title"}}Connections · gpix{{end}}
+{{define "bodyclass"}}page-gateways{{end}}
+{{define "head"}}
+<style>
+  .gw-grid{display:grid;gap:1.25rem}
+  .gw-panel{padding:1.25rem 1.4rem}
+  .gw-panel h2{margin:0 0 .25rem;font-size:1.1rem}
+  .gw-status{display:inline-flex;align-items:center;gap:.4rem;font-size:.8rem;padding:.15rem .55rem;border-radius:999px;border:1px solid var(--border,#3334);}
+  .gw-status.on{color:#0a7;border-color:#0a74}
+  .gw-status.off{color:#a40;border-color:#a404}
+  .gw-row{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin:.55rem 0}
+  .gw-row label{flex:0 0 9rem;font-size:.82rem;opacity:.8}
+  .gw-row .input{flex:1 1 16rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85rem}
+  .gw-actions{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.75rem}
+  .gw-hint{font-size:.8rem;opacity:.7;margin:.3rem 0 0}
+  .gw-banner{margin-bottom:1rem}
+  pre.gw-guide{background:var(--surface-2,#0001);padding:.9rem 1rem;border-radius:.5rem;overflow:auto;font-size:.8rem;line-height:1.5}
+  .copied{outline:2px solid #0a7 !important}
+</style>
+{{end}}
+{{define "content"}}
+{{$g := .Gateways}}
+<section class="page-heading">
+  <div>
+    <span class="eyebrow">Settings</span>
+    <h1>Connections</h1>
+    <p>Expose your library over S3-compatible and WebDAV endpoints. Generate credentials below, copy them somewhere safe, and point your client at the endpoint.</p>
+  </div>
+</section>
+
+{{if .Error}}<div class="alert alert-error gw-banner"><strong>Error</strong><span>{{.Error}}</span></div>{{end}}
+{{if $g.Notice}}<div class="alert gw-banner"><span>{{$g.Notice}}</span></div>{{end}}
+
+<div class="gw-grid">
+
+  <!-- S3 -->
+  <section class="panel gw-panel">
+    <div class="gw-row" style="justify-content:space-between">
+      <h2>S3-compatible endpoint</h2>
+      {{if $g.S3Enabled}}<span class="gw-status on">● listening</span>{{else}}<span class="gw-status off">○ not enabled</span>{{end}}
+    </div>
+    {{if $g.S3Enabled}}
+      <div class="gw-row"><label>Endpoint URL</label><input class="input" readonly value="{{$g.S3Endpoint}}"><button class="btn" type="button" data-copy>Copy</button></div>
+    {{else}}
+      <p class="gw-hint">Set <code>s3_listen</code> in <code>gpix-web.conf</code> (e.g. <code>127.0.0.1:9000</code>) and restart to enable. You can still generate keys now.</p>
+    {{end}}
+    <div class="gw-row"><label>Region</label><input class="input" readonly value="{{$g.S3Region}}"></div>
+    <div class="gw-row"><label>Bucket</label><input class="input" readonly value="{{$g.S3Bucket}}"><button class="btn" type="button" data-copy>Copy</button></div>
+
+    <div class="gw-row"><label>Access key ID</label>
+      {{if $g.HasS3Keys}}<input class="input" readonly value="{{$g.S3AccessKey}}"><button class="btn" type="button" data-copy>Copy</button>
+      {{else}}<input class="input" readonly value="— none yet —">{{end}}
+    </div>
+    <div class="gw-row"><label>Secret access key</label>
+      {{if $g.HasS3Keys}}
+        <input class="input" readonly type="{{if eq $g.JustGenerated "s3"}}text{{else}}password{{end}}" value="{{$g.S3SecretKey}}" data-secret>
+        <button class="btn" type="button" data-reveal>Show</button>
+        <button class="btn" type="button" data-copy>Copy</button>
+      {{else}}<input class="input" readonly value="— none yet —">{{end}}
+    </div>
+    {{if eq $g.JustGenerated "s3"}}<p class="gw-hint"><strong>Save the secret now</strong> — for convenience it stays available here, but treat it like a password.</p>{{end}}
+
+    <div class="gw-actions">
+      <form method="POST" action="/settings/gateways/regenerate">
+        <input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="which" value="s3">
+        <button class="btn btn-primary" type="submit">{{if $g.HasS3Keys}}Regenerate keys{{else}}Generate keys{{end}}</button>
+      </form>
+      {{if $g.HasS3Keys}}
+      <form method="POST" action="/settings/gateways/clear" onsubmit="return confirm('Clear S3 keys? Clients using them will stop working.')">
+        <input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="which" value="s3">
+        <button class="btn" type="submit">Clear</button>
+      </form>
+      {{end}}
+    </div>
+  </section>
+
+  <!-- WebDAV -->
+  <section class="panel gw-panel">
+    <div class="gw-row" style="justify-content:space-between">
+      <h2>WebDAV endpoint</h2>
+      {{if $g.WebDAVEnabled}}<span class="gw-status on">● listening</span>{{else}}<span class="gw-status off">○ not enabled</span>{{end}}
+    </div>
+    {{if $g.WebDAVEnabled}}
+      <div class="gw-row"><label>Endpoint URL</label><input class="input" readonly value="{{$g.WebDAVEndpoint}}"><button class="btn" type="button" data-copy>Copy</button></div>
+    {{else}}
+      <p class="gw-hint">Set <code>webdav_listen</code> in <code>gpix-web.conf</code> (e.g. <code>127.0.0.1:8081</code>) and restart to enable.</p>
+    {{end}}
+    <div class="gw-row"><label>Username</label><input class="input" readonly value="{{$g.WebDAVUsername}}"><button class="btn" type="button" data-copy>Copy</button></div>
+    <div class="gw-row"><label>App password</label>
+      {{if $g.HasWebDAVPass}}
+        <input class="input" readonly type="{{if eq $g.JustGenerated "webdav"}}text{{else}}password{{end}}" value="{{$g.WebDAVPassword}}" data-secret>
+        <button class="btn" type="button" data-reveal>Show</button>
+        <button class="btn" type="button" data-copy>Copy</button>
+      {{else}}<input class="input" readonly value="— using main login password —">{{end}}
+    </div>
+    <p class="gw-hint">Your normal login password always works for WebDAV. The app password is an optional, revocable alternative you can paste into a client.</p>
+
+    <div class="gw-actions">
+      <form method="POST" action="/settings/gateways/regenerate">
+        <input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="which" value="webdav">
+        <button class="btn btn-primary" type="submit">{{if $g.HasWebDAVPass}}Regenerate password{{else}}Generate app password{{end}}</button>
+      </form>
+      {{if $g.HasWebDAVPass}}
+      <form method="POST" action="/settings/gateways/clear" onsubmit="return confirm('Clear the WebDAV app password?')">
+        <input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="which" value="webdav">
+        <button class="btn" type="submit">Clear</button>
+      </form>
+      {{end}}
+    </div>
+  </section>
+
+  <!-- Quick guide -->
+  <section class="panel gw-panel">
+    <h2>Quick guide</h2>
+    <p class="gw-hint">Turn an endpoint on by adding its <code>*_listen</code> line to <code>gpix-web.conf</code> and restarting gpix. Then use the generated credentials:</p>
+{{if $g.S3Enabled}}
+    <p class="gw-hint" style="margin-top:.8rem"><strong>S3 (AWS CLI)</strong></p>
+<pre class="gw-guide">export AWS_ACCESS_KEY_ID={{if $g.HasS3Keys}}{{$g.S3AccessKey}}{{else}}&lt;access-key&gt;{{end}}
+export AWS_SECRET_ACCESS_KEY=&lt;your-secret&gt;
+aws --endpoint-url {{$g.S3Endpoint}} s3 ls s3://{{$g.S3Bucket}}/
+aws --endpoint-url {{$g.S3Endpoint}} s3 cp ./report.pdf s3://{{$g.S3Bucket}}/
+aws --endpoint-url {{$g.S3Endpoint}} s3 cp s3://{{$g.S3Bucket}}/report.pdf ./out.pdf</pre>
+{{end}}
+{{if $g.WebDAVEnabled}}
+    <p class="gw-hint" style="margin-top:.8rem"><strong>WebDAV (rclone)</strong></p>
+<pre class="gw-guide">rclone config create gpix webdav url {{$g.WebDAVEndpoint}} vendor other \
+  user {{$g.WebDAVUsername}} pass &lt;app-password-or-login-password&gt;
+rclone ls gpix:
+rclone copy ./report.pdf gpix:</pre>
+    <p class="gw-hint"><strong>WebDAV (curl)</strong></p>
+<pre class="gw-guide">curl -u {{$g.WebDAVUsername}}:&lt;password&gt; -T report.pdf {{$g.WebDAVEndpoint}}/report.pdf
+curl -u {{$g.WebDAVUsername}}:&lt;password&gt; {{$g.WebDAVEndpoint}}/report.pdf -o out.pdf</pre>
+{{end}}
+    <p class="gw-hint">macOS Finder: <em>Go → Connect to Server</em> → <code>{{if $g.WebDAVEndpoint}}{{$g.WebDAVEndpoint}}{{else}}http://host:8081{{end}}</code>. Windows: <em>Map network drive</em> with the same URL.</p>
+  </section>
+
+</div>
+{{end}}
+{{define "scripts"}}
+<script>
+(function(){
+  function flash(btn){btn.classList.add('copied');setTimeout(function(){btn.classList.remove('copied');},700);}
+  document.querySelectorAll('[data-copy]').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var input=btn.parentElement.querySelector('.input');
+      if(!input)return;
+      var wasPw=input.type==='password';
+      if(wasPw)input.type='text';
+      input.select();input.setSelectionRange(0,input.value.length);
+      var done=function(){flash(btn);if(wasPw)input.type='password';};
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(input.value).then(done,function(){document.execCommand('copy');done();});
+      }else{document.execCommand('copy');done();}
+    });
+  });
+  document.querySelectorAll('[data-reveal]').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var input=btn.parentElement.querySelector('[data-secret]');
+      if(!input)return;
+      if(input.type==='password'){input.type='text';btn.textContent='Hide';}
+      else{input.type='password';btn.textContent='Show';}
+    });
+  });
+})();
+</script>
+{{end}}
