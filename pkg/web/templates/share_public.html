@@ -1,0 +1,47 @@
+{{define "share_public"}}{{template "layout" .}}{{end}}
+{{define "title"}}Shared photo · gpix{{end}}
+{{define "bodyclass"}}page-share-public{{end}}
+{{define "head"}}
+<style>
+  .sp-wrap{max-width:760px;margin:3rem auto;padding:0 1rem;text-align:center}
+  .sp-card{padding:1.5rem;border:1px solid var(--border,#3333);border-radius:14px}
+  .sp-media img{max-width:100%;height:auto;border-radius:10px}
+  .sp-name{margin:.8rem 0 .2rem;font-weight:600;word-break:break-all}
+  .sp-actions{margin-top:1rem;display:flex;gap:.5rem;justify-content:center;flex-wrap:wrap}
+  .sp-pw{max-width:340px;margin:0 auto;display:flex;flex-direction:column;gap:.7rem}
+  .sp-muted{opacity:.7;font-size:.9rem}
+</style>
+{{end}}
+{{define "content"}}
+{{with .SharePublic}}
+<div class="sp-wrap">
+  <div class="sp-card">
+  {{if .Expired}}
+    <h1>Link unavailable</h1>
+    <p class="sp-muted">{{if .Error}}{{.Error}}{{else}}This share has expired or reached its download limit.{{end}}</p>
+  {{else if .NeedsPassword}}
+    <h1>Password required</h1>
+    <p class="sp-muted">This shared item is protected.</p>
+    {{if .Error}}<p class="sp-muted" style="color:#c33">{{.Error}}</p>{{end}}
+    <form class="sp-pw" method="POST" action="/s/{{.Token}}">
+      <input class="input" type="password" name="password" placeholder="Password" autofocus required>
+      <button class="btn btn-primary" type="submit">View</button>
+    </form>
+  {{else}}
+    <div class="sp-media">
+      {{if .IsVideo}}
+        <p class="sp-muted">Shared video</p>
+      {{else}}
+        <img src="/s/{{.Token}}/thumb?size=512" alt="{{.FileName}}">
+      {{end}}
+    </div>
+    <div class="sp-name">{{.FileName}}</div>
+    <div class="sp-actions">
+      {{if .AllowOriginal}}<a class="btn btn-primary" href="/s/{{.Token}}/raw">Download original</a>{{end}}
+    </div>
+  {{end}}
+  </div>
+  <p class="sp-muted" style="margin-top:1rem">Shared with gpix</p>
+</div>
+{{end}}
+{{end}}
