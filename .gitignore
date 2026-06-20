@@ -21,6 +21,7 @@ debug.log
 gateways.json
 *.db*
 *.key
+encryption.json
 
 
 # Local config (provide a *.example template instead)
