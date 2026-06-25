@@ -38,7 +38,7 @@ func (s *Server) loadTemplates() error {
 			return string(out)
 		},
 	}
-	pages := []string{"login", "browse", "view", "upload", "error", "gateways", "shares", "share_public"}
+	pages := []string{"login", "browse", "view", "upload", "error", "gateways", "shares", "share_public", "import"}
 	s.pageTmpls = make(map[string]*template.Template, len(pages))
 	layout, err := tmplFS.ReadFile("templates/layout.html")
 	if err != nil {
@@ -62,29 +62,30 @@ func (s *Server) loadTemplates() error {
 }
 
 type pageData struct {
-	User         string
-	CSRF         string
-	Items        []listingItem
-	NextCursor   string
-	Title        string
-	Message      string
-	Error        string
-	LogtoEnabled bool
-	Filename     string
-	MediaKey     string
-	IsVideo      bool
-	IsDisguised  bool
-	MediaClass   string // "photo" | "video" | "file"
-	Encrypted    bool
-	OriginalName string
-	DisplayKind  string
-	Mtime        time.Time
-	SizeBytes    int64
-	StreamURL    string
-	RawToken     string
-	AbsStreamURL string
-	Qualities    []qualityChoice
-	HasQualities bool
+	User          string
+	CSRF          string
+	Items         []listingItem
+	NextCursor    string
+	Title         string
+	Message       string
+	Error         string
+	LogtoEnabled  bool
+	PasswordLogin bool
+	Filename      string
+	MediaKey      string
+	IsVideo       bool
+	IsDisguised   bool
+	MediaClass    string // "photo" | "video" | "file"
+	Encrypted     bool
+	OriginalName  string
+	DisplayKind   string
+	Mtime         time.Time
+	SizeBytes     int64
+	StreamURL     string
+	RawToken      string
+	AbsStreamURL  string
+	Qualities     []qualityChoice
+	HasQualities  bool
 
 	Gateways *gatewaysView
 

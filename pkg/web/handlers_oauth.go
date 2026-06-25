@@ -11,7 +11,7 @@ import (
 const oauthCookieName = "gpix_oauth"
 
 func (s *Server) loginError(w http.ResponseWriter, msg string) {
-	s.render(w, "login", pageData{Error: msg, LogtoEnabled: s.cfg.LogtoEnabled()})
+	s.renderLogin(w, msg)
 }
 
 // handleLogtoLogin starts the OIDC authorization-code + PKCE flow.
@@ -112,15 +112,7 @@ func (s *Server) handleLogtoCallback(w http.ResponseWriter, r *http.Request) {
 	if sessUser == "" {
 		sessUser = ui.Subject
 	}
-	ttl := time.Duration(s.cfg.SessionDays) * 24 * time.Hour
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    s.signSession(sessUser, ttl),
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   int(ttl.Seconds()),
-	})
+	s.setSessionCookie(w, sessUser, time.Duration(s.cfg.SessionDays)*24*time.Hour)
 	http.Redirect(w, r, "/browse", http.StatusSeeOther)
 }
 

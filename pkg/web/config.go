@@ -54,11 +54,22 @@ type Config struct {
 	LogtoRedirect     string // defaults to ServerURL + /auth/logto/callback
 	SignupAllowlist   []string
 	MaxUsers          int
+
+	// DisablePasswordLogin hides the username/password form and rejects password
+	// logins, leaving only OIDC. Ignored unless Logto is enabled, so you can't
+	// lock yourself out by disabling both.
+	DisablePasswordLogin bool
 }
 
 // LogtoEnabled reports whether OIDC login is configured.
 func (c Config) LogtoEnabled() bool {
 	return c.LogtoEndpoint != "" && c.LogtoClientID != "" && c.LogtoClientSecret != ""
+}
+
+// PasswordLoginEnabled reports whether the username/password form is active.
+// Password login can only be turned off when OIDC is available.
+func (c Config) PasswordLoginEnabled() bool {
+	return !(c.DisablePasswordLogin && c.LogtoEnabled())
 }
 
 // LoadConfig builds the configuration. Every value can come from environment
@@ -181,6 +192,8 @@ func applyKey(cfg *Config, k, v string) {
 		if n, _ := strconv.Atoi(v); n >= 0 {
 			cfg.MaxUsers = n
 		}
+	case "disable_password_login":
+		cfg.DisablePasswordLogin = truthy(v)
 	}
 }
 
@@ -223,6 +236,7 @@ func applyEnv(cfg *Config) {
 		"logto_redirect":           "GPIX_LOGTO_REDIRECT",
 		"signup_allowlist":         "GPIX_SIGNUP_ALLOWLIST",
 		"max_users":                "GPIX_MAX_USERS",
+		"disable_password_login":   "GPIX_DISABLE_PASSWORD_LOGIN",
 	}
 	for key, envName := range env {
 		if v, ok := os.LookupEnv(envName); ok {

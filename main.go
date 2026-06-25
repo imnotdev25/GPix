@@ -23,6 +23,7 @@ import (
 	"gpix/pkg/dav"
 	"gpix/pkg/gpmc"
 	"gpix/pkg/gwcreds"
+	"gpix/pkg/immichimport"
 	"gpix/pkg/library"
 	"gpix/pkg/mediacrypt"
 	"gpix/pkg/oidc"
@@ -251,6 +252,18 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 	lib := library.New(gp, 0, cacheStore)
 	lib.Start(ctx, 0)
 
+	// Shared Google-Photos-backed object store (encryption + library cache),
+	// used by the gateways, the Immich importer, and the web UI.
+	be := gpmcstore.New(gp, gpmcstore.Options{TempDir: cfg.TempDir, Crypt: crypt, Library: lib})
+
+	// Immich → gpix importer (background job; remembers imported asset IDs in
+	// import.db so re-runs are idempotent).
+	importer, err := immichimport.New(be, filepath.Join(filepath.Dir(secretPath), "import.db"), log.With("service", "import"))
+	if err != nil {
+		return fmt.Errorf("import db: %w", err)
+	}
+	defer importer.Close()
+
 	// SQLite-backed share links, stored next to secret.key.
 	sharePath := filepath.Join(filepath.Dir(secretPath), "shares.db")
 	shareStore, err := share.Open(sharePath)
@@ -286,7 +299,7 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 		log.Info("logto login enabled", "redirect", redirect, "max_users", cfg.MaxUsers, "allowlist", len(cfg.SignupAllowlist))
 	}
 
-	srv, err := web.New(cfg, gp, lib, gw, crypt, shareStore, oc, us, log)
+	srv, err := web.New(cfg, gp, lib, gw, crypt, shareStore, oc, us, importer, log)
 	if err != nil {
 		return fmt.Errorf("web.New: %w", err)
 	}
@@ -297,11 +310,6 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 		"profile", profileName,
 		"secret_path", secretPath,
 	)
-
-	// All gateways share one Google-Photos-backed object store (with the same
-	// encryption manager as the web UI, so encrypted items round-trip on every
-	// surface).
-	be := gpmcstore.New(gp, gpmcstore.Options{TempDir: cfg.TempDir, Crypt: crypt, Library: lib})
 
 	runners := []func(context.Context) error{srv.Run}
 

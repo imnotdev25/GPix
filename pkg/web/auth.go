@@ -28,12 +28,25 @@ func (s *Server) handleLoginForm(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	s.render(w, "login", pageData{LogtoEnabled: s.cfg.LogtoEnabled()})
+	s.renderLogin(w, "")
+}
+
+// renderLogin renders the login page with the current auth options.
+func (s *Server) renderLogin(w http.ResponseWriter, errMsg string) {
+	s.render(w, "login", pageData{
+		Error:         errMsg,
+		LogtoEnabled:  s.cfg.LogtoEnabled(),
+		PasswordLogin: s.cfg.PasswordLoginEnabled(),
+	})
 }
 
 func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.PasswordLoginEnabled() {
+		s.renderLogin(w, "Password login is disabled. Use the single sign-on option.")
+		return
+	}
 	if err := r.ParseForm(); err != nil {
-		s.render(w, "login", pageData{Error: "bad form", LogtoEnabled: s.cfg.LogtoEnabled()})
+		s.renderLogin(w, "bad form")
 		return
 	}
 	u := r.FormValue("u")
@@ -42,26 +55,35 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	dampDelay := 300 * time.Millisecond
 	if u != s.cfg.Username {
 		time.Sleep(dampDelay)
-		s.render(w, "login", pageData{Error: "invalid credentials", LogtoEnabled: s.cfg.LogtoEnabled()})
+		s.renderLogin(w, "invalid credentials")
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(s.cfg.PasswordHash), []byte(p)); err != nil {
 		time.Sleep(dampDelay)
-		s.render(w, "login", pageData{Error: "invalid credentials", LogtoEnabled: s.cfg.LogtoEnabled()})
+		s.renderLogin(w, "invalid credentials")
 		return
 	}
 
 	ttl := time.Duration(s.cfg.SessionDays) * 24 * time.Hour
-	tok := s.signSession(u, ttl)
+	s.setSessionCookie(w, u, ttl)
+	http.Redirect(w, r, "/browse", http.StatusSeeOther)
+}
+
+// setSessionCookie issues the signed session cookie. It uses SameSite=Lax (not
+// Strict) so the cookie is sent on the top-level redirect that completes an
+// external OIDC login — with Strict the browser withholds it on that
+// cross-site-initiated navigation and the user bounces back to /login. Lax still
+// withholds the cookie from cross-site POSTs, so state-changing endpoints stay
+// CSRF-safe.
+func (s *Server) setSessionCookie(w http.ResponseWriter, username string, ttl time.Duration) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
-		Value:    tok,
+		Value:    s.signSession(username, ttl),
 		Path:     "/",
 		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
+		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(ttl.Seconds()),
 	})
-	http.Redirect(w, r, "/browse", http.StatusSeeOther)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
