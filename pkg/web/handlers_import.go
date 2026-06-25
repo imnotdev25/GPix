@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 )
 
 func (s *Server) handleImportPage(w http.ResponseWriter, r *http.Request) {
@@ -28,7 +29,11 @@ func (s *Server) handleImportStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Immich server URL and API key are required", http.StatusBadRequest)
 		return
 	}
-	if err := s.importer.Start(serverURL, apiKey); err != nil {
+	workers := 3
+	if n, err := strconv.Atoi(r.FormValue("workers")); err == nil && n > 0 {
+		workers = n
+	}
+	if err := s.importer.Start(serverURL, apiKey, workers); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}

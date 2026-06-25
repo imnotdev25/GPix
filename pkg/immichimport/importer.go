@@ -17,6 +17,7 @@ import (
 type Progress struct {
 	Running    bool      `json:"running"`
 	Server     string    `json:"server"`
+	Workers    int       `json:"workers"`
 	Total      int       `json:"total"`
 	Done       int       `json:"done"`
 	Skipped    int       `json:"skipped"`
@@ -26,6 +27,8 @@ type Progress struct {
 	StartedAt  time.Time `json:"startedAt"`
 	FinishedAt time.Time `json:"finishedAt"`
 }
+
+const maxWorkers = 10
 
 // Importer copies assets from an Immich server into gpix via the object store
 // (so encryption/disguise/dedup all apply). One job runs at a time. Already-
@@ -81,9 +84,16 @@ func (im *Importer) Stop() {
 	}
 }
 
-// Start kicks off an import in the background. It returns an error if one is
-// already running.
-func (im *Importer) Start(serverURL, apiKey string) error {
+// Start kicks off an import in the background using `workers` parallel
+// transfers (clamped to 1..maxWorkers). It returns an error if one is already
+// running.
+func (im *Importer) Start(serverURL, apiKey string, workers int) error {
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > maxWorkers {
+		workers = maxWorkers
+	}
 	im.mu.Lock()
 	if im.prog.Running {
 		im.mu.Unlock()
@@ -91,15 +101,15 @@ func (im *Importer) Start(serverURL, apiKey string) error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	im.cancel = cancel
-	im.prog = Progress{Running: true, Server: serverURL, StartedAt: time.Now()}
+	im.prog = Progress{Running: true, Server: serverURL, Workers: workers, StartedAt: time.Now()}
 	im.mu.Unlock()
 
 	client := NewClient(serverURL, apiKey)
-	go im.run(ctx, client, serverURL)
+	go im.run(ctx, client, serverURL, workers)
 	return nil
 }
 
-func (im *Importer) run(ctx context.Context, client *Client, serverURL string) {
+func (im *Importer) run(ctx context.Context, client *Client, serverURL string, workers int) {
 	defer func() {
 		im.mu.Lock()
 		im.prog.Running = false
@@ -113,15 +123,32 @@ func (im *Importer) run(ctx context.Context, client *Client, serverURL string) {
 		return
 	}
 
+	// Worker pool: a producer paginates Immich and feeds assets to `workers`
+	// goroutines that download + upload in parallel.
+	ch := make(chan Asset, workers*2)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for a := range ch {
+				if ctx.Err() != nil {
+					return
+				}
+				im.processAsset(ctx, client, serverURL, a)
+			}
+		}()
+	}
+
 	var prevFirstID string
 	for page := 1; ; page++ {
 		if ctx.Err() != nil {
-			return
+			break
 		}
 		items, total, err := client.SearchPage(ctx, page)
 		if err != nil {
 			im.setError(err.Error())
-			return
+			break
 		}
 		if page == 1 {
 			im.mu.Lock()
@@ -129,25 +156,32 @@ func (im *Importer) run(ctx context.Context, client *Client, serverURL string) {
 			im.mu.Unlock()
 		}
 		if len(items) == 0 {
-			return
+			break
 		}
 		// Guard against servers that ignore the page parameter and keep returning
 		// the same first page (which would loop forever).
 		if items[0].ID == prevFirstID {
-			return
+			break
 		}
 		prevFirstID = items[0].ID
 
+		stop := false
 		for _, a := range items {
-			if ctx.Err() != nil {
-				return
+			select {
+			case ch <- a:
+			case <-ctx.Done():
+				stop = true
 			}
-			im.processAsset(ctx, client, serverURL, a)
+			if stop {
+				break
+			}
 		}
-		if len(items) < PageSize {
-			return // last page
+		if stop || len(items) < PageSize {
+			break // cancelled, or last page
 		}
 	}
+	close(ch)
+	wg.Wait()
 }
 
 func (im *Importer) processAsset(ctx context.Context, client *Client, serverURL string, a Asset) {

@@ -36,6 +36,11 @@
       <span>API key</span>
       <input class="input" type="password" name="api_key" autocomplete="off" placeholder="Create one in Immich → Account Settings → API Keys" required>
     </label>
+    <label class="field">
+      <span>Parallel transfers</span>
+      <input class="input" type="number" name="workers" min="1" max="10" value="3">
+      <small class="im-muted">How many photos to copy at once (1–10). Higher is faster but uses more bandwidth and memory.</small>
+    </label>
     <div style="display:flex;gap:.5rem;align-items:center">
       <button class="btn btn-primary" type="submit" id="im-start">Start import</button>
       <button class="btn" type="submit" form="im-stop-form" id="im-stop">Stop</button>
@@ -51,6 +56,7 @@
       <span>Skipped: <b id="im-skip">0</b></span>
       <span>Failed: <b id="im-fail">0</b></span>
       <span>Total: <b id="im-total">?</b></span>
+      <span>Parallel: <b id="im-workers">—</b></span>
     </div>
     <div class="im-current" id="im-current"></div>
     <div class="im-err" id="im-error"></div>
@@ -69,7 +75,7 @@
       box.hidden = !active; idle.hidden = !!active;
       set('im-state', p.running ? 'running' : (p.error ? 'error' : 'finished'));
       set('im-done', p.done||0); set('im-skip', p.skipped||0); set('im-fail', p.failed||0);
-      set('im-total', p.total||'?');
+      set('im-total', p.total||'?'); set('im-workers', p.workers||'—');
       set('im-current', p.running && p.current ? ('Copying: '+p.current) : '');
       document.getElementById('im-error').textContent = p.error ? ('Last error: '+p.error) : '';
       var done=(p.done||0)+(p.skipped||0)+(p.failed||0);
