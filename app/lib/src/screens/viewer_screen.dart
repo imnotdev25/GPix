@@ -151,13 +151,20 @@ class _ViewerPage extends StatelessWidget {
         maxScale: 5,
         child: Center(
           child: CachedNetworkImage(
-            imageUrl: client.thumbUrl(item, size: 2048),
+            imageUrl: client.thumbUrl(item, size: 1536),
             httpHeaders: client.authHeaders,
             fit: BoxFit.contain,
-            placeholder: (_, __) =>
-                const Center(child: CircularProgressIndicator()),
-            errorWidget: (_, __, ___) => const Center(
-                child: Icon(Icons.broken_image, size: 48)),
+            // Show the (already-cached) grid thumbnail instantly while the larger
+            // image loads, so the viewer is never blank.
+            placeholder: (_, __) => CachedNetworkImage(
+              imageUrl: client.thumbUrl(item, size: 256),
+              httpHeaders: client.authHeaders,
+              fit: BoxFit.contain,
+              errorWidget: (_, __, ___) =>
+                  const Center(child: CircularProgressIndicator()),
+            ),
+            errorWidget: (_, __, ___) =>
+                const Center(child: Icon(Icons.broken_image, size: 48)),
           ),
         ),
       );

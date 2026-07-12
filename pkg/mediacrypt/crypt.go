@@ -54,6 +54,8 @@ var (
 	ErrNotEncrypted = errors.New("mediacrypt: not an encrypted stream")
 	// ErrCorrupt indicates a malformed or tampered stream.
 	ErrCorrupt = errors.New("mediacrypt: corrupt or tampered stream")
+	// ErrNoKey means none of the available keys could decrypt the stream.
+	ErrNoKey = errors.New("mediacrypt: no available key decrypts this item")
 )
 
 // Header is the parsed, authenticated metadata of an encrypted stream.
@@ -196,6 +198,98 @@ func DecryptingReader(src io.Reader, master []byte) (Header, io.ReadCloser, erro
 		pw.CloseWithError(decryptBody(pw, src, master, hdr, headerBytes, salt))
 	}()
 	return hdr, pr, nil
+}
+
+// DecryptMulti is like Decrypt but tries each candidate master key, using the
+// one that authenticates the first chunk. Order matters only for speed.
+func DecryptMulti(dst io.Writer, src io.Reader, masters [][]byte) (Header, error) {
+	hdr, headerBytes, salt, err := ParseHeader(src)
+	if err != nil {
+		return Header{}, err
+	}
+	if err := decryptBodyMulti(dst, src, masters, hdr, headerBytes, salt); err != nil {
+		return Header{}, err
+	}
+	return hdr, nil
+}
+
+// DecryptingReaderMulti is the streaming multi-key variant of DecryptingReader.
+func DecryptingReaderMulti(src io.Reader, masters [][]byte) (Header, io.ReadCloser, error) {
+	hdr, headerBytes, salt, err := ParseHeader(src)
+	if err != nil {
+		return Header{}, nil, err
+	}
+	pr, pw := io.Pipe()
+	go func() {
+		pw.CloseWithError(decryptBodyMulti(pw, src, masters, hdr, headerBytes, salt))
+	}()
+	return hdr, pr, nil
+}
+
+// decryptBodyMulti buffers the first chunk, finds the key that authenticates it
+// (AES-GCM makes the wrong key fail), then streams the rest with that key.
+func decryptBodyMulti(dst io.Writer, src io.Reader, masters [][]byte, hdr Header, headerBytes, salt []byte) error {
+	if len(masters) == 1 {
+		return decryptBody(dst, src, masters[0], hdr, headerBytes, salt)
+	}
+	chunks := numChunks(hdr.OrigSize, hdr.ChunkSize)
+	firstPtLen := int64(hdr.ChunkSize)
+	if hdr.OrigSize < firstPtLen {
+		firstPtLen = hdr.OrigSize
+	}
+	firstCt := make([]byte, firstPtLen+tagSize)
+	if _, err := io.ReadFull(src, firstCt); err != nil {
+		return fmt.Errorf("mediacrypt: read ciphertext: %w", err)
+	}
+	nonce0 := makeNonce(0, chunks == 1)
+
+	var aead cipher.AEAD
+	var pt0 []byte
+	for _, master := range masters {
+		if len(master) != keySize {
+			continue
+		}
+		key, err := deriveKey(master, salt)
+		if err != nil {
+			continue
+		}
+		a, err := newAEAD(key)
+		if err != nil {
+			continue
+		}
+		if p, oerr := a.Open(nil, nonce0, firstCt, headerBytes); oerr == nil {
+			aead, pt0 = a, p
+			break
+		}
+	}
+	if aead == nil {
+		return ErrNoKey
+	}
+	if _, err := dst.Write(pt0); err != nil {
+		return err
+	}
+
+	remaining := hdr.OrigSize - firstPtLen
+	ctbuf := make([]byte, hdr.ChunkSize+tagSize)
+	for i := int64(1); i < chunks; i++ {
+		ptLen := int64(hdr.ChunkSize)
+		if remaining < ptLen {
+			ptLen = remaining
+		}
+		ctLen := ptLen + tagSize
+		if _, err := io.ReadFull(src, ctbuf[:ctLen]); err != nil {
+			return fmt.Errorf("mediacrypt: read ciphertext: %w", err)
+		}
+		pt, err := aead.Open(nil, makeNonce(uint64(i), i == chunks-1), ctbuf[:ctLen], nil)
+		if err != nil {
+			return ErrCorrupt
+		}
+		if _, err := dst.Write(pt); err != nil {
+			return err
+		}
+		remaining -= ptLen
+	}
+	return nil
 }
 
 func decryptBody(dst io.Writer, src io.Reader, master []byte, hdr Header, headerBytes, salt []byte) error {

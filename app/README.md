@@ -29,6 +29,9 @@ flutter create --platforms=android,ios,linux,macos --org com.gpix --project-name
 
 flutter pub get
 
+# Apply the gpix app icon to every platform (from assets/icon/gpix.png):
+dart run flutter_launcher_icons
+
 # Run on a connected device / desktop:
 flutter run                 # pick a device when prompted
 # or target one explicitly:
@@ -46,9 +49,34 @@ flutter build linux         # Linux desktop
 flutter build macos         # macOS desktop
 ```
 
+### macOS `.dmg`
+
+One command builds the release app (with the network entitlement) and packages a drag-to-Applications disk image at `build/gpix.dmg`:
+
+```bash
+cd app
+bash tool/build_macos_dmg.sh
+```
+
+What it does: ensures the `macos/` platform exists → adds the `com.apple.security.network.client` entitlement to **Release.entitlements** (so the packaged app can reach your server) → `flutter build macos --release` → stages the `.app` + an `Applications` symlink → `hdiutil create` a compressed DMG.
+
+The result is **unsigned**, so Gatekeeper warns on first launch. Recipients can right-click the app → **Open**, or clear the quarantine flag:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/gpix_app.app
+```
+
+To distribute without warnings you need an **Apple Developer ID** certificate and **notarization** (`codesign --deep --options runtime …` then `xcrun notarytool submit … && xcrun stapler staple`). That requires a paid Apple Developer account and signing secrets — out of scope for the local build here. For a prettier DMG (custom background, icon layout) you can also `brew install create-dmg` and point it at `build/macos/Build/Products/Release/gpix_app.app`.
+
 ## Platform notes
 
-- **macOS** is sandboxed and blocks outbound network by default. After `flutter create`, add the network-client entitlement to **both** `macos/Runner/DebugProfile.entitlements` and `macos/Runner/Release.entitlements`:
+- **macOS** is sandboxed and blocks outbound network by default — without the entitlement, connecting fails with `SocketException: ... Operation not permitted, errno = 1`. After `flutter create`, run the helper (from `app/`):
+
+  ```bash
+  bash tool/setup_macos.sh      # then re-run: flutter run -d macos
+  ```
+
+  It adds `com.apple.security.network.client` to **both** `macos/Runner/DebugProfile.entitlements` (used by `flutter run`) and `Release.entitlements` (used by `flutter build`). To do it by hand, add:
 
   ```xml
   <key>com.apple.security.network.client</key>

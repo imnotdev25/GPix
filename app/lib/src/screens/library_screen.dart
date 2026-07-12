@@ -169,6 +169,7 @@ class _Tile extends StatelessWidget {
             httpHeaders: client.authHeaders,
             fit: BoxFit.cover,
             fadeInDuration: const Duration(milliseconds: 120),
+            memCacheWidth: 320, // decode small: tiles are ~140px, saves memory/CPU
             placeholder: (_, __) => Container(color: scheme.surfaceContainerHighest),
             errorWidget: (_, __, ___) => Container(
               color: scheme.surfaceContainerHighest,

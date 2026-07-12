@@ -28,6 +28,7 @@ func (s *Server) routes() http.Handler {
 
 	mux.HandleFunc("GET /settings/import", s.requireSession(s.handleImportPage))
 	mux.HandleFunc("POST /settings/import/start", s.requireSession(s.handleImportStart))
+	mux.HandleFunc("POST /settings/import/google-start", s.requireSession(s.handleImportGoogleStart))
 	mux.HandleFunc("GET /settings/import/status", s.requireSession(s.handleImportStatus))
 	mux.HandleFunc("POST /settings/import/stop", s.requireSession(s.handleImportStop))
 
@@ -35,11 +36,13 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /settings/api-tokens/create", s.requireSession(s.handleAPITokenCreate))
 	mux.HandleFunc("POST /settings/api-tokens/revoke/{id}", s.requireSession(s.handleAPITokenRevoke))
 
+	mux.HandleFunc("POST /settings/delete-all", s.requireSession(s.handleDeleteAll))
 	mux.HandleFunc("GET /settings/gateways", s.requireSession(s.handleGateways))
 	mux.HandleFunc("POST /settings/gateways/regenerate", s.requireSession(s.handleGatewaysRegenerate))
 	mux.HandleFunc("POST /settings/gateways/clear", s.requireSession(s.handleGatewaysClear))
 	mux.HandleFunc("POST /settings/gateways/encryption", s.requireSession(s.handleEncryptionToggle))
 	mux.HandleFunc("GET /settings/gateways/encryption-key", s.requireSession(s.handleEncryptionKeyBackup))
+	mux.HandleFunc("POST /settings/gateways/encryption-keys", s.requireSession(s.handleEncryptionKeyUpload))
 
 	mux.HandleFunc("GET /stream/{token}", s.handleStream)
 	mux.HandleFunc("GET /raw/{token}", s.handleRaw)

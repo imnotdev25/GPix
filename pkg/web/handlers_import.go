@@ -40,6 +40,31 @@ func (s *Server) handleImportStart(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/settings/import", http.StatusSeeOther)
 }
 
+func (s *Server) handleImportGoogleStart(w http.ResponseWriter, r *http.Request) {
+	if s.importer == nil {
+		http.Error(w, "import not available", http.StatusNotFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	authData := r.FormValue("auth_data")
+	if authData == "" {
+		http.Error(w, "source GP_AUTH_DATA is required", http.StatusBadRequest)
+		return
+	}
+	workers := 3
+	if n, err := strconv.Atoi(r.FormValue("workers")); err == nil && n > 0 {
+		workers = n
+	}
+	if err := s.importer.StartGoogle(authData, workers); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	http.Redirect(w, r, "/settings/import", http.StatusSeeOther)
+}
+
 func (s *Server) handleImportStatus(w http.ResponseWriter, r *http.Request) {
 	if s.importer == nil {
 		http.Error(w, "import not available", http.StatusNotFound)

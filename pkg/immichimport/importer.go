@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -84,10 +85,23 @@ func (im *Importer) Stop() {
 	}
 }
 
-// Start kicks off an import in the background using `workers` parallel
-// transfers (clamped to 1..maxWorkers). It returns an error if one is already
-// running.
+// Start kicks off an import from an Immich server, in the background, using
+// `workers` parallel transfers (clamped to 1..maxWorkers).
 func (im *Importer) Start(serverURL, apiKey string, workers int) error {
+	return im.start(serverURL, immichSource{c: NewClient(serverURL, apiKey)}, workers)
+}
+
+// StartGoogle imports the whole library of another Google account, given its
+// GP_AUTH_DATA, into the current gpix (encryption/disguise/dedup apply).
+func (im *Importer) StartGoogle(authData string, workers int) error {
+	src, err := newGoogleSource(authData)
+	if err != nil {
+		return err
+	}
+	return im.start("Google account", src, workers)
+}
+
+func (im *Importer) start(display string, src source, workers int) error {
 	if workers < 1 {
 		workers = 1
 	}
@@ -101,15 +115,14 @@ func (im *Importer) Start(serverURL, apiKey string, workers int) error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	im.cancel = cancel
-	im.prog = Progress{Running: true, Server: serverURL, Workers: workers, StartedAt: time.Now()}
+	im.prog = Progress{Running: true, Server: display, Workers: workers, StartedAt: time.Now()}
 	im.mu.Unlock()
 
-	client := NewClient(serverURL, apiKey)
-	go im.run(ctx, client, serverURL, workers)
+	go im.run(ctx, src, workers)
 	return nil
 }
 
-func (im *Importer) run(ctx context.Context, client *Client, serverURL string, workers int) {
+func (im *Importer) run(ctx context.Context, src source, workers int) {
 	defer func() {
 		im.mu.Lock()
 		im.prog.Running = false
@@ -118,100 +131,88 @@ func (im *Importer) run(ctx context.Context, client *Client, serverURL string, w
 		im.mu.Unlock()
 	}()
 
-	if err := client.Ping(ctx); err != nil {
+	if err := src.ping(ctx); err != nil {
 		im.setError("connect: " + err.Error())
 		return
 	}
+	label := src.label()
 
-	// Enumerate the whole library via timeline buckets (robust across Immich
-	// versions, unlike search pagination).
-	buckets, err := client.Buckets(ctx)
-	if err != nil {
-		im.setError("list library: " + err.Error())
-		return
-	}
-	total := 0
-	for _, b := range buckets {
-		total += b.Count
-	}
-	im.mu.Lock()
-	im.prog.Total = total
-	im.mu.Unlock()
-
-	// Worker pool: the producer walks each bucket and feeds assets to `workers`
-	// goroutines that download + upload in parallel.
-	ch := make(chan Asset, workers*2)
+	// Worker pool: the producer enumerates the source and feeds items to
+	// `workers` goroutines that download + upload in parallel.
+	ch := make(chan srcItem, workers*2)
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for a := range ch {
+			for it := range ch {
 				if ctx.Err() != nil {
 					return
 				}
-				im.processAsset(ctx, client, serverURL, a)
+				im.processItem(ctx, src, label, it)
 			}
 		}()
 	}
 
-	stop := false
-	for _, b := range buckets {
-		if ctx.Err() != nil {
-			break
-		}
-		assets, aerr := client.BucketAssets(ctx, b.TimeBucket)
-		if aerr != nil {
-			im.setError(aerr.Error())
-			continue // skip this bucket, keep importing the rest
-		}
-		for _, a := range assets {
+	queued := 0
+	err := src.enumerate(ctx,
+		func(total int) {
+			im.mu.Lock()
+			im.prog.Total = total
+			im.mu.Unlock()
+		},
+		func(it srcItem) bool {
 			select {
-			case ch <- a:
+			case ch <- it:
+				queued++
+				// Periodically return transient buffers to the OS so a long,
+				// highly parallel import doesn't let RSS balloon (Go keeps a large
+				// freed heap by default; also honors GOMEMLIMIT).
+				if queued%200 == 0 {
+					debug.FreeOSMemory()
+				}
+				return true
 			case <-ctx.Done():
-				stop = true
+				return false
 			}
-			if stop {
-				break
-			}
-		}
-		if stop {
-			break
-		}
+		})
+	if err != nil {
+		im.setError(err.Error())
 	}
 	close(ch)
 	wg.Wait()
+	debug.FreeOSMemory()
 }
 
-func (im *Importer) processAsset(ctx context.Context, client *Client, serverURL string, a Asset) {
+func (im *Importer) processItem(ctx context.Context, src source, label string, it srcItem) {
 	im.mu.Lock()
-	im.prog.Current = a.OriginalFileName
+	im.prog.Current = it.name
 	im.mu.Unlock()
 
-	if im.alreadyImported(serverURL, a.ID) {
+	if im.alreadyImported(label, it.id) {
 		im.count(func(p *Progress) { p.Skipped++ })
 		return
 	}
 
-	rc, fname, err := client.Download(ctx, a.ID)
+	rc, fname, err := src.download(ctx, it.id)
 	if err != nil {
 		im.fail(err)
 		return
 	}
 	defer rc.Close()
 
-	name := a.OriginalFileName
+	name := it.name
 	if name == "" {
-		name = fname // from Content-Disposition (columnar timeline has no filename)
+		name = fname // some sources report the filename only at download time
 	}
 	if name == "" {
-		name = a.ID
+		name = it.id
 	}
 	if _, err := im.be.Put(ctx, name, rc, -1, ""); err != nil {
 		im.fail(err)
 		return
 	}
-	im.markImported(serverURL, a.ID)
+	im.markImported(label, it.id)
 	im.count(func(p *Progress) { p.Done++ })
 }
 

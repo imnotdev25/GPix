@@ -3,18 +3,26 @@
 {{define "bodyclass"}}page-apitokens{{end}}
 {{define "head"}}
 <style>
-  .tok-panel,.tok-help{padding:1.2rem 1.4rem}
-  .tok-form{display:flex;gap:.6rem;align-items:flex-end;flex-wrap:wrap}
-  .tok-form .field{display:flex;flex-direction:column;gap:.25rem;font-size:.85rem;min-width:240px}
-  .tok-new{padding:1.2rem 1.4rem;border:1px solid #2d7a;background:#2d71}
-  .tok-reveal{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin-top:.5rem}
-  .tok-reveal code{font-size:.95rem;padding:.55rem .7rem;border-radius:8px;background:var(--surface-2,#0002);word-break:break-all;flex:1;min-width:260px}
-  .tok-muted{opacity:.72;font-size:.85rem}
-  .tok-table{width:100%;border-collapse:collapse;margin-top:.6rem;font-size:.88rem}
-  .tok-table th,.tok-table td{text-align:left;padding:.5rem .6rem;border-bottom:1px solid var(--border,#0002)}
-  .tok-table code{opacity:.8}
-  .btn-danger{background:#c33;color:#fff}
-  .tok-code{background:var(--surface-2,#0002);padding:.7rem .8rem;border-radius:8px;overflow-x:auto;font-size:.82rem;margin-top:.5rem}
+  /* Consistent vertical rhythm: every block is a card with its own spacing so
+     panels never butt up against or overlap each other. */
+  .page-apitokens .page-heading{margin-bottom:1.1rem}
+  .page-apitokens .panel{display:block;padding:1.2rem 1.4rem;margin:0 0 1.1rem;box-sizing:border-box}
+  .page-apitokens .panel > h2{margin:0 0 .8rem;font-size:1rem}
+  .page-apitokens .panel > h2:first-child{margin-top:0}
+  .tok-form{display:flex;gap:.75rem;align-items:flex-end;flex-wrap:wrap}
+  .tok-form .field{display:flex;flex-direction:column;gap:.3rem;font-size:.85rem;min-width:240px;flex:1}
+  .tok-form .btn{white-space:nowrap}
+  .tok-new{border:1px solid var(--accent,#2d7);background:color-mix(in srgb,var(--accent,#2d7) 8%,transparent)}
+  .tok-reveal{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin-top:.6rem}
+  .tok-reveal code{font-size:.9rem;padding:.55rem .7rem;border-radius:8px;background:var(--surface-2,rgba(0,0,0,.06));word-break:break-all;flex:1 1 260px;min-width:0}
+  .tok-muted{opacity:.72;font-size:.85rem;margin:.2rem 0 0}
+  .tok-table{width:100%;border-collapse:collapse;margin-top:.4rem;font-size:.88rem;table-layout:auto}
+  .tok-table th,.tok-table td{text-align:left;padding:.55rem .6rem;border-bottom:1px solid var(--border,rgba(0,0,0,.1));vertical-align:middle}
+  .tok-table th{font-weight:600;opacity:.7}
+  .tok-table code{opacity:.8;word-break:break-all}
+  .tok-table td form{margin:0}
+  .btn-danger{background:#c0392b;color:#fff;border:none}
+  .tok-code{background:var(--surface-2,rgba(0,0,0,.06));padding:.7rem .8rem;border-radius:8px;overflow-x:auto;font-size:.82rem;margin:.5rem 0 0;white-space:pre}
   .tok-copied{color:#2a8;font-size:.82rem;margin-left:.3rem}
 </style>
 {{end}}

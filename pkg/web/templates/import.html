@@ -63,6 +63,25 @@
   </div>
   <p class="im-muted" id="im-idle">No import running. Enter your Immich details above and start one. You can leave this page — it keeps running in the background.</p>
 </section>
+
+<section class="panel im-panel">
+  <h2 style="margin:0 0 .3rem;font-size:1.05rem">Import from another Google account</h2>
+  <p class="im-muted" style="margin:0 0 .9rem">Copy an entire Google Photos library from a second account into this gpix. Paste that account's <code>GP_AUTH_DATA</code>. Items are re-uploaded through <em>this</em> account (encryption/disguising apply if enabled), and anything already imported is skipped. Progress shows above.</p>
+  <form class="im-form" method="POST" action="/settings/import/google-start">
+    <input type="hidden" name="_csrf" value="{{.CSRF}}">
+    <label class="field">
+      <span>Source account GP_AUTH_DATA</span>
+      <input class="input" type="password" name="auth_data" autocomplete="off" placeholder="the source account's auth_data string" required>
+    </label>
+    <label class="field">
+      <span>Parallel transfers</span>
+      <input class="input" type="number" name="workers" min="1" max="10" value="3">
+    </label>
+    <div style="display:flex;gap:.5rem;align-items:center">
+      <button class="btn btn-primary" type="submit">Start Google import</button>
+    </div>
+  </form>
+</section>
 {{end}}
 {{define "scripts"}}
 <script>

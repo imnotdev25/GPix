@@ -147,11 +147,19 @@ type gatewaysView struct {
 	EncryptionAvailable   bool
 	EncryptionEnabled     bool
 	EncryptionFingerprint string
+	EncryptionKeyCount    int
+	EncryptionKeys        []gwKeyInfo
 
 	// JustGenerated is "s3" or "webdav" right after a regenerate, so the page
 	// can reveal the new secret with a "save this now" prompt. Empty otherwise.
 	JustGenerated string
 	Notice        string
+}
+
+// gwKeyInfo is a loaded encryption key shown on the Connections page.
+type gwKeyInfo struct {
+	Fingerprint string
+	Active      bool
 }
 
 type qualityChoice struct {

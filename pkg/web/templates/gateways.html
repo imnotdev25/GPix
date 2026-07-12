@@ -54,6 +54,20 @@
       <a class="btn" href="/settings/gateways/encryption-key" download>Download key backup</a>
     </div>
     <p class="gw-hint" style="margin-top:.6rem"><strong>Back up your key.</strong> It lives in <code>encryption.key</code> next to your config. If you lose it, encrypted items are <strong>permanently unreadable</strong> — gpix cannot recover them, and neither can Google. Turning encryption off does not touch existing encrypted items; they still open with the same key.</p>
+
+    <div style="margin-top:1rem;padding-top:.9rem;border-top:1px solid var(--border,#3333)">
+      <div class="gw-row" style="justify-content:space-between"><label style="flex:0 0 auto">Decryption keys ({{$g.EncryptionKeyCount}})</label></div>
+      <p class="gw-hint" style="margin:.1rem 0 .5rem">gpix tries <em>every</em> loaded key when decrypting, so you can add keys exported from other gpix instances/accounts. The first (active) key encrypts new uploads.</p>
+      {{if $g.EncryptionKeys}}
+      <p style="margin:0 0 .6rem">{{range $g.EncryptionKeys}}<code style="margin:0 .45rem .3rem 0;display:inline-block">{{.Fingerprint}}{{if .Active}} · active{{end}}</code>{{end}}</p>
+      {{end}}
+      <form method="POST" action="/settings/gateways/encryption-keys" enctype="multipart/form-data" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+        <input type="hidden" name="_csrf" value="{{.CSRF}}">
+        <input type="file" name="keys" multiple accept=".key,application/octet-stream">
+        <button class="btn" type="submit">Upload key file(s)</button>
+      </form>
+      <p class="gw-hint" style="margin-top:.3rem">Accepts raw 32-byte, hex, or base64 key files (like the “Download key backup” above). Saved as <code>encryption_&lt;id&gt;.key</code> and used immediately — no restart.</p>
+    </div>
   </section>
   {{end}}
 
@@ -158,6 +172,18 @@ curl -u {{$g.WebDAVUsername}}:&lt;password&gt; {{$g.WebDAVEndpoint}}/report.pdf 
     <p class="gw-hint">macOS Finder: <em>Go → Connect to Server</em> → <code>{{if $g.WebDAVEndpoint}}{{$g.WebDAVEndpoint}}{{else}}http://host:8081{{end}}</code>. Windows: <em>Map network drive</em> with the same URL.</p>
   </section>
 
+  <section class="panel gw-panel" style="border:1px solid #c0392b66">
+    <h2 style="color:#c0392b">Danger zone</h2>
+    <p class="gw-hint">Move <strong>every</strong> item in your gpix library to the Google&nbsp;Photos trash at once. There's no undo from here — you'd have to restore from the Google&nbsp;Photos trash within 60 days.</p>
+    <form id="delete-all-form" method="POST" action="/settings/delete-all">
+      <input type="hidden" name="_csrf" value="{{.CSRF}}">
+      <input type="hidden" name="confirm" value="">
+      <div class="gw-actions">
+        <button type="button" id="delete-all-btn" class="btn" style="background:#c0392b;color:#fff;border:none">Delete all photos…</button>
+      </div>
+    </form>
+  </section>
+
 </div>
 {{end}}
 {{define "scripts"}}
@@ -185,6 +211,17 @@ curl -u {{$g.WebDAVUsername}}:&lt;password&gt; {{$g.WebDAVEndpoint}}/report.pdf 
       else{input.type='password';btn.textContent='Show';}
     });
   });
+  // Delete-all: three escalating warnings, then a typed confirmation.
+  var dbtn=document.getElementById('delete-all-btn');
+  if(dbtn){dbtn.addEventListener('click',function(){
+    if(!confirm('Delete ALL photos and videos from gpix? Every item will be moved to the Google Photos trash.'))return;
+    if(!confirm('Are you absolutely sure? This affects your ENTIRE library — there is no undo here.'))return;
+    if(!confirm('Last chance — think once again. Delete everything now?'))return;
+    if(prompt('Type DELETE (in capitals) to confirm.')!=='DELETE')return;
+    var f=document.getElementById('delete-all-form');
+    f.querySelector('input[name=confirm]').value='DELETE';
+    f.submit();
+  });}
 })();
 </script>
 {{end}}

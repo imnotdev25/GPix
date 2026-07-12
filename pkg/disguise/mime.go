@@ -7,21 +7,37 @@ import (
 	"strings"
 )
 
+func init() {
+	// Go's built-in MIME table doesn't include modern image formats. That made
+	// an encrypted HEIC (stored as "photo.heic.mp4") fail LooksLikeDisguisedFilename
+	// — mime.TypeByExtension(".heic") returned "" — so the ".mp4" was never
+	// stripped and the item showed up as a video. Register them process-wide so
+	// extension→MIME lookups resolve.
+	for ext, typ := range map[string]string{
+		".heic": "image/heic",
+		".heif": "image/heif",
+		".avif": "image/avif",
+		".dng":  "image/x-adobe-dng",
+	} {
+		_ = mime.AddExtensionType(ext, typ)
+	}
+}
+
 var mediaMIMEs = map[string]bool{
-	"image/jpeg":        true,
-	"image/png":         true,
-	"image/heic":        true,
-	"image/heif":        true,
-	"image/webp":        true,
-	"image/gif":         true,
-	"image/avif":        true,
-	"video/mp4":         true,
-	"video/quicktime":   true,
-	"video/webm":        true,
-	"video/x-matroska":  true,
-	"video/x-msvideo":   true,
-	"video/3gpp":        true,
-	"application/mp4":   true,
+	"image/jpeg":       true,
+	"image/png":        true,
+	"image/heic":       true,
+	"image/heif":       true,
+	"image/webp":       true,
+	"image/gif":        true,
+	"image/avif":       true,
+	"video/mp4":        true,
+	"video/quicktime":  true,
+	"video/webm":       true,
+	"video/x-matroska": true,
+	"video/x-msvideo":  true,
+	"video/3gpp":       true,
+	"application/mp4":  true,
 }
 
 func IsMediaMIME(m string) bool {

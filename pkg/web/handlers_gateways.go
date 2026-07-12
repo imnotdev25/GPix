@@ -42,9 +42,13 @@ func (s *Server) gatewaysView(r *http.Request, justGenerated, notice string) *ga
 	encAvailable := s.crypt != nil
 	encEnabled := false
 	encFingerprint := ""
+	var encKeys []gwKeyInfo
 	if encAvailable {
 		encEnabled = s.crypt.Enabled()
 		encFingerprint = s.crypt.Fingerprint()
+		for _, k := range s.crypt.Keys() {
+			encKeys = append(encKeys, gwKeyInfo{Fingerprint: k.Fingerprint, Active: k.Active})
+		}
 	}
 	return &gatewaysView{
 		S3Enabled:   s.cfg.S3Listen != "",
@@ -64,6 +68,8 @@ func (s *Server) gatewaysView(r *http.Request, justGenerated, notice string) *ga
 		EncryptionAvailable:   encAvailable,
 		EncryptionEnabled:     encEnabled,
 		EncryptionFingerprint: encFingerprint,
+		EncryptionKeyCount:    len(encKeys),
+		EncryptionKeys:        encKeys,
 
 		JustGenerated: justGenerated,
 		Notice:        notice,

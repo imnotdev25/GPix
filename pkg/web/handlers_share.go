@@ -47,7 +47,9 @@ func (s *Server) handleShareCreate(w http.ResponseWriter, r *http.Request) {
 	for _, k := range keys {
 		name, isVideo := k, false
 		if s.lib != nil {
-			if it, ok, _ := s.lib.Get(r.Context(), k); ok {
+			// Peek is non-blocking; Get could trigger a full library refresh from
+			// Google and make share creation hang. Names come from the warm cache.
+			if it, ok := s.lib.Peek(k); ok {
 				display, class, _ := classifyItem(it.Filename, it.Kind)
 				name, isVideo = display, class == classVideo
 			}
