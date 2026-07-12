@@ -69,18 +69,28 @@ xattr -dr com.apple.quarantine /Applications/gpix_app.app
 
 To distribute without warnings you need an **Apple Developer ID** certificate and **notarization** (`codesign --deep --options runtime …` then `xcrun notarytool submit … && xcrun stapler staple`). That requires a paid Apple Developer account and signing secrets — out of scope for the local build here. For a prettier DMG (custom background, icon layout) you can also `brew install create-dmg` and point it at `build/macos/Build/Products/Release/gpix_app.app`.
 
+> **Icon generation note:** `dart run flutter_launcher_icons` writes icons for every platform listed under `flutter_launcher_icons:` in `pubspec.yaml`. If you only generated some platforms (e.g. `flutter create --platforms=macos`), it fails with `PathNotFoundException: ... AppIcon.appiconset/Icon-App-20x20@1x.png` because the iOS/Android icon folders don't exist. Fix: create every platform first —
+>
+> ```bash
+> flutter create --platforms=android,ios,linux,macos --org com.gpix --project-name gpix_app .
+> ```
+>
+> — or set the platforms you're not building to `false` under `flutter_launcher_icons:`. The icon step is optional; the app runs with Flutter's default icon without it.
+
 ## Platform notes
 
-- **macOS** is sandboxed and blocks outbound network by default — without the entitlement, connecting fails with `SocketException: ... Operation not permitted, errno = 1`. After `flutter create`, run the helper (from `app/`):
+- **macOS** is sandboxed and blocks both outbound network and file dialogs by default. Without the entitlements you get `SocketException: ... Operation not permitted, errno = 1` (can't reach the server) and the **Upload / Download file panels don't work**. After `flutter create`, run the helper (from `app/`):
 
   ```bash
   bash tool/setup_macos.sh      # then re-run: flutter run -d macos
   ```
 
-  It adds `com.apple.security.network.client` to **both** `macos/Runner/DebugProfile.entitlements` (used by `flutter run`) and `Release.entitlements` (used by `flutter build`). To do it by hand, add:
+  It adds `com.apple.security.network.client` **and** `com.apple.security.files.user-selected.read-write` to **both** `macos/Runner/DebugProfile.entitlements` (used by `flutter run`) and `Release.entitlements` (used by `flutter build`). By hand:
 
   ```xml
   <key>com.apple.security.network.client</key>
+  <true/>
+  <key>com.apple.security.files.user-selected.read-write</key>
   <true/>
   ```
 

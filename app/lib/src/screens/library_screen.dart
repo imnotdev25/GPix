@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -155,24 +157,12 @@ class _Tile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return InkWell(
       onTap: onTap,
       child: Stack(
         fit: StackFit.expand,
         children: [
-          CachedNetworkImage(
-            imageUrl: client.thumbUrl(item, size: 256),
-            httpHeaders: client.authHeaders,
-            fit: BoxFit.cover,
-            fadeInDuration: const Duration(milliseconds: 120),
-            memCacheWidth: 320, // decode small: tiles are ~140px, saves memory/CPU
-            placeholder: (_, __) => Container(color: scheme.surfaceContainerHighest),
-            errorWidget: (_, __, ___) => Container(
-              color: scheme.surfaceContainerHighest,
-              child: Icon(_fallbackIcon(item), color: scheme.onSurfaceVariant),
-            ),
-          ),
+          _Thumb(item: item, client: client),
           if (item.isVideo)
             const Positioned(
               right: 4,
@@ -193,6 +183,75 @@ class _Tile extends StatelessWidget {
               child: Icon(Icons.lock, size: 16, color: Colors.white70),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// _Thumb loads a media thumbnail. For encrypted photos/documents the server
+/// renders the real thumbnail in the background (Google only has the blue
+/// placeholder), so this re-fetches a few times until it resolves. HEIC can't
+/// be decoded server-side, so those aren't retried.
+class _Thumb extends StatefulWidget {
+  const _Thumb({required this.item, required this.client});
+  final MediaItem item;
+  final ApiClient client;
+
+  @override
+  State<_Thumb> createState() => _ThumbState();
+}
+
+class _ThumbState extends State<_Thumb> {
+  int _bust = 0;
+  final List<Timer> _timers = [];
+
+  bool get _mayBePending {
+    final it = widget.item;
+    if (!it.encrypted) return false;
+    // Encrypted photos/docs are rendered server-side (HEIC included now).
+    return it.className == 'photo' || it.className == 'doc';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    if (_mayBePending) {
+      for (final d in const [
+        Duration(seconds: 3),
+        Duration(seconds: 8),
+        Duration(seconds: 18),
+        Duration(seconds: 40),
+      ]) {
+        _timers.add(Timer(d, () {
+          if (mounted) setState(() => _bust++);
+        }));
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final t in _timers) {
+      t.cancel();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final url = widget.client.thumbUrl(widget.item, size: 256) +
+        (_bust > 0 ? '&_r=$_bust' : '');
+    return CachedNetworkImage(
+      imageUrl: url,
+      httpHeaders: widget.client.authHeaders,
+      fit: BoxFit.cover,
+      fadeInDuration: const Duration(milliseconds: 120),
+      memCacheWidth: 320, // decode small: tiles are ~140px, saves memory/CPU
+      placeholder: (_, __) => Container(color: scheme.surfaceContainerHighest),
+      errorWidget: (_, __, ___) => Container(
+        color: scheme.surfaceContainerHighest,
+        child: Icon(_fallbackIcon(widget.item), color: scheme.onSurfaceVariant),
       ),
     );
   }

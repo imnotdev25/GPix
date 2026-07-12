@@ -70,11 +70,12 @@ func classifyItem(filename string, kind gpmc.MediaKind) (display string, class m
 }
 
 // canGenerateThumb reports whether gpix can build a thumbnail for a decrypted
-// photo in pure Go (JPEG/PNG/GIF). Other formats (HEIC, WebP, RAW) fall back to
-// the Google-side thumbnail, which is blank for encrypted items.
+// photo. JPEG/PNG/GIF are stdlib; HEIC/HEIF via the CGo-free decoder registered
+// in imagecodecs.go. Other formats (WebP, RAW) fall back to the Google-side
+// thumbnail, which is blank for encrypted items.
 func canGenerateThumb(name string) bool {
 	switch strings.ToLower(filepath.Ext(name)) {
-	case ".jpg", ".jpeg", ".png", ".gif":
+	case ".jpg", ".jpeg", ".png", ".gif", ".heic", ".heif":
 		return true
 	}
 	return false
