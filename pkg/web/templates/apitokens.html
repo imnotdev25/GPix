@@ -1,0 +1,97 @@
+{{define "apitokens"}}{{template "layout" .}}{{end}}
+{{define "title"}}API tokens · gpix{{end}}
+{{define "bodyclass"}}page-apitokens{{end}}
+{{define "head"}}
+<style>
+  .tok-panel,.tok-help{padding:1.2rem 1.4rem}
+  .tok-form{display:flex;gap:.6rem;align-items:flex-end;flex-wrap:wrap}
+  .tok-form .field{display:flex;flex-direction:column;gap:.25rem;font-size:.85rem;min-width:240px}
+  .tok-new{padding:1.2rem 1.4rem;border:1px solid #2d7a;background:#2d71}
+  .tok-reveal{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin-top:.5rem}
+  .tok-reveal code{font-size:.95rem;padding:.55rem .7rem;border-radius:8px;background:var(--surface-2,#0002);word-break:break-all;flex:1;min-width:260px}
+  .tok-muted{opacity:.72;font-size:.85rem}
+  .tok-table{width:100%;border-collapse:collapse;margin-top:.6rem;font-size:.88rem}
+  .tok-table th,.tok-table td{text-align:left;padding:.5rem .6rem;border-bottom:1px solid var(--border,#0002)}
+  .tok-table code{opacity:.8}
+  .btn-danger{background:#c33;color:#fff}
+  .tok-code{background:var(--surface-2,#0002);padding:.7rem .8rem;border-radius:8px;overflow-x:auto;font-size:.82rem;margin-top:.5rem}
+  .tok-copied{color:#2a8;font-size:.82rem;margin-left:.3rem}
+</style>
+{{end}}
+{{define "content"}}
+<section class="page-heading">
+  <div>
+    <span class="eyebrow">Settings</span>
+    <h1>API tokens</h1>
+    <p>Create a token to sign in from the gpix app (or any API client). A token grants full access to your library through <code>/api/v1</code> — treat it like a password and revoke it if a device is lost.</p>
+  </div>
+</section>
+
+{{if .NewToken}}
+<section class="panel tok-new">
+  <h2>New token — copy it now</h2>
+  <p class="tok-muted">This is the only time the full token is shown. Paste it into the app together with your server URL.</p>
+  <div class="tok-reveal">
+    <code id="tok-secret">{{.NewToken}}</code>
+    <button class="btn btn-primary" type="button" onclick="copyTok()">Copy</button>
+    <span class="tok-copied" id="tok-copied" hidden>Copied</span>
+  </div>
+</section>
+{{end}}
+
+<section class="panel tok-panel">
+  <form class="tok-form" method="POST" action="/settings/api-tokens/create">
+    <input type="hidden" name="_csrf" value="{{.CSRF}}">
+    <label class="field">
+      <span>Label</span>
+      <input class="input" type="text" name="label" placeholder="e.g. My phone" maxlength="60">
+    </label>
+    <button class="btn btn-primary" type="submit">Generate token</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Your tokens</h2>
+  {{if .APITokens}}
+  <table class="tok-table">
+    <thead><tr><th>Label</th><th>Token</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+    <tbody>
+    {{range .APITokens}}
+      <tr>
+        <td>{{.Label}}</td>
+        <td><code>{{.Preview}}</code></td>
+        <td>{{fmtDate .CreatedAt}}</td>
+        <td>{{if .LastUsed.IsZero}}never{{else}}{{fmtDate .LastUsed}}{{end}}</td>
+        <td>
+          <form method="POST" action="/settings/api-tokens/revoke/{{.ID}}" onsubmit="return confirm('Revoke this token? Any app using it will stop working.')">
+            <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+            <button class="btn btn-danger" type="submit">Revoke</button>
+          </form>
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="tok-muted">No tokens yet. Generate one above to connect the app.</p>
+  {{end}}
+</section>
+
+<section class="panel tok-help">
+  <h2>Using it</h2>
+  <p class="tok-muted">In the gpix app, enter your server URL and paste the token. For raw API calls, send it as a Bearer header:</p>
+  <pre class="tok-code">curl -H "Authorization: Bearer &lt;token&gt;" &lt;your-server&gt;/api/v1/ping</pre>
+</section>
+{{end}}
+{{define "scripts"}}
+<script>
+function copyTok(){
+  var el=document.getElementById('tok-secret');
+  if(!el||!navigator.clipboard) return;
+  navigator.clipboard.writeText(el.textContent).then(function(){
+    var c=document.getElementById('tok-copied');
+    if(c){c.hidden=false;setTimeout(function(){c.hidden=true;},1500);}
+  });
+}
+</script>
+{{end}}

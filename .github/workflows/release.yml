@@ -1,0 +1,180 @@
+name: release
+
+# Builds cross-platform artifacts and publishes them to a GitHub Release.
+# Trigger by pushing a version tag:  git tag v0.1.0 && git push origin v0.1.0
+# (or run manually from the Actions tab).
+#
+#   Server (Go):  linux/macos/windows, amd64 + arm64 — cross-compiled from one
+#                 Linux runner (the server is pure-Go / CGO-free).
+#   App (Flutter): Android APK, Linux desktop bundle, macOS app.
+#   iOS is not built here — the App Store / device install needs code signing.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # create releases + upload assets
+
+jobs:
+  # ---------------------------------------------------------------- Go server
+  server:
+    name: Server binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cross-compile
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          mkdir -p dist
+          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            export GOOS="${t%/*}" GOARCH="${t#*/}" CGO_ENABLED=0
+            bin="gpix"; [ "$GOOS" = "windows" ] && bin="gpix.exe"
+            echo "→ $GOOS/$GOARCH"
+            go build -trimpath -ldflags "-s -w" -o "$bin" .
+            name="gpix_${VERSION}_${GOOS}_${GOARCH}"
+            if [ "$GOOS" = "windows" ]; then
+              zip -q "dist/${name}.zip" "$bin" README.md LICENSE
+            else
+              tar -czf "dist/${name}.tar.gz" "$bin" README.md LICENSE
+            fi
+            rm -f "$bin"
+          done
+          ( cd dist && sha256sum gpix_* > checksums-server.txt )
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server
+          path: dist/*
+
+  # ------------------------------------------------------------- Android (APK)
+  app-android:
+    name: App · Android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Build APK
+        working-directory: app
+        run: |
+          flutter create --platforms=android --org com.gpix --project-name gpix_app .
+          flutter pub get
+          flutter build apk --release
+      - name: Stage
+        working-directory: app
+        run: |
+          mkdir -p out
+          cp build/app/outputs/flutter-apk/app-release.apk \
+             "out/gpix_${GITHUB_REF_NAME:-dev}_android.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-android
+          path: app/out/*
+
+  # ------------------------------------------------------------- Linux desktop
+  app-linux:
+    name: App · Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Build Linux bundle
+        working-directory: app
+        run: |
+          flutter create --platforms=linux --org com.gpix --project-name gpix_app .
+          flutter pub get
+          flutter build linux --release
+      - name: Package
+        working-directory: app
+        run: |
+          mkdir -p out
+          ( cd build/linux/*/release/bundle && tar -czf - . ) \
+            > "out/gpix_${GITHUB_REF_NAME:-dev}_linux-x64.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-linux
+          path: app/out/*
+
+  # --------------------------------------------------------------- macOS app
+  app-macos:
+    name: App · macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Build macOS app
+        working-directory: app
+        run: |
+          flutter create --platforms=macos --org com.gpix --project-name gpix_app .
+          # The macOS app is sandboxed; grant outbound network access so it can
+          # reach your gpix server.
+          for f in macos/Runner/DebugProfile.entitlements macos/Runner/Release.entitlements; do
+            /usr/libexec/PlistBuddy -c "Add :com.apple.security.network.client bool true" "$f" 2>/dev/null \
+              || /usr/libexec/PlistBuddy -c "Set :com.apple.security.network.client true" "$f"
+          done
+          flutter pub get
+          flutter build macos --release
+      - name: Package
+        working-directory: app
+        run: |
+          mkdir -p out
+          APP="$(ls -d build/macos/Build/Products/Release/*.app | head -n1)"
+          ( cd "$(dirname "$APP")" && zip -qry - "$(basename "$APP")" ) \
+            > "out/gpix_${GITHUB_REF_NAME:-dev}_macos.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-macos
+          path: app/out/*
+
+  # ------------------------------------------------------- publish the release
+  publish:
+    name: Publish release
+    needs: [server, app-android, app-linux, app-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Collect assets
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          ls -la release
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          body: |
+            Automated cross-platform build for `${{ github.ref_name }}`.
+
+            **Server (Go)** — `gpix_<ver>_<os>_<arch>.tar.gz` / `.zip` for Linux, macOS, and Windows (amd64 + arm64). Verify downloads against `checksums-server.txt`.
+
+            **App (Flutter)**
+            - `..._android.apk` — sideload on Android (enable "install unknown apps").
+            - `..._linux-x64.tar.gz` — extract and run the bundled binary (needs GTK 3).
+            - `..._macos.zip` — unsigned; first launch: right-click → **Open**, or `xattr -dr com.apple.quarantine gpix_app.app`.
+
+            iOS isn't included (requires code signing). Build it locally per `app/README.md`.

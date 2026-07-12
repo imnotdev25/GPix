@@ -123,7 +123,22 @@ func (im *Importer) run(ctx context.Context, client *Client, serverURL string, w
 		return
 	}
 
-	// Worker pool: a producer paginates Immich and feeds assets to `workers`
+	// Enumerate the whole library via timeline buckets (robust across Immich
+	// versions, unlike search pagination).
+	buckets, err := client.Buckets(ctx)
+	if err != nil {
+		im.setError("list library: " + err.Error())
+		return
+	}
+	total := 0
+	for _, b := range buckets {
+		total += b.Count
+	}
+	im.mu.Lock()
+	im.prog.Total = total
+	im.mu.Unlock()
+
+	// Worker pool: the producer walks each bucket and feeds assets to `workers`
 	// goroutines that download + upload in parallel.
 	ch := make(chan Asset, workers*2)
 	var wg sync.WaitGroup
@@ -140,33 +155,17 @@ func (im *Importer) run(ctx context.Context, client *Client, serverURL string, w
 		}()
 	}
 
-	var prevFirstID string
-	for page := 1; ; page++ {
+	stop := false
+	for _, b := range buckets {
 		if ctx.Err() != nil {
 			break
 		}
-		items, total, err := client.SearchPage(ctx, page)
-		if err != nil {
-			im.setError(err.Error())
-			break
+		assets, aerr := client.BucketAssets(ctx, b.TimeBucket)
+		if aerr != nil {
+			im.setError(aerr.Error())
+			continue // skip this bucket, keep importing the rest
 		}
-		if page == 1 {
-			im.mu.Lock()
-			im.prog.Total = total
-			im.mu.Unlock()
-		}
-		if len(items) == 0 {
-			break
-		}
-		// Guard against servers that ignore the page parameter and keep returning
-		// the same first page (which would loop forever).
-		if items[0].ID == prevFirstID {
-			break
-		}
-		prevFirstID = items[0].ID
-
-		stop := false
-		for _, a := range items {
+		for _, a := range assets {
 			select {
 			case ch <- a:
 			case <-ctx.Done():
@@ -176,8 +175,8 @@ func (im *Importer) run(ctx context.Context, client *Client, serverURL string, w
 				break
 			}
 		}
-		if stop || len(items) < PageSize {
-			break // cancelled, or last page
+		if stop {
+			break
 		}
 	}
 	close(ch)
@@ -194,7 +193,7 @@ func (im *Importer) processAsset(ctx context.Context, client *Client, serverURL 
 		return
 	}
 
-	rc, err := client.Download(ctx, a.ID)
+	rc, fname, err := client.Download(ctx, a.ID)
 	if err != nil {
 		im.fail(err)
 		return
@@ -202,6 +201,9 @@ func (im *Importer) processAsset(ctx context.Context, client *Client, serverURL 
 	defer rc.Close()
 
 	name := a.OriginalFileName
+	if name == "" {
+		name = fname // from Content-Disposition (columnar timeline has no filename)
+	}
 	if name == "" {
 		name = a.ID
 	}

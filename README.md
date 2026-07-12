@@ -10,6 +10,8 @@ gpix is a self-hosted Google Photos client written in Go. One binary, several wa
 - **Client-side encryption** — optionally encrypt every upload with a gpix-managed key before it leaves your machine. Google stores only opaque video; no one without your key can see your media. Inside gpix, encrypted photos still display as photos (decrypted on the fly, with locally-generated thumbnails).
 - **Password-protected sharing** — create expiring, optionally password-protected public links to a single item or a whole **gallery** of selected items, stored in SQLite. Encrypted items are decrypted server-side for the recipient.
 - **Single sign-on (Logto/OIDC)** — optional Logto login with an email allowlist and a max-users registration cap, alongside the built-in password login.
+- **Import from Immich** — point gpix at an existing Immich server (URL + API key) and copy your whole library in from the web UI, with live progress and resumable, dedup'd runs.
+- **Cross-platform app + JSON API** — a `/api/v1` JSON API (Bearer-token auth) powers a **Flutter app** for Android, iOS, Linux, and macOS: browse, full-screen view, upload/back up, share, and drive Immich imports from your phone or desktop. Material 3 UI, one codebase. See [`app/`](app).
 - **CLI** — upload files or whole folders from the terminal.
 - **Telegram bot** — `/upload`, `/get`, `/list`, `/info` against your library from any chat (optional).
 - **Universal file storage** — PDFs, archives, executables, any file gets transparently wrapped as a 1-second MP4 with the original bytes preserved. Uploaded as a "video", recovered byte-identical on download. Text/markdown documents additionally render to a readable **image** in the UI while staying downloadable as the original. Effectively unlimited cloud storage for arbitrary files.
@@ -391,9 +393,56 @@ A **"Sign in with Logto"** button then appears on the login page.
 
 - **Allowlist** — `signup_allowlist` is a comma-separated list of exact emails (`a@b.com`) and/or domains (`@b.com`). On a user's *first* sign-in, their email must match (empty list = anyone Logto authenticates). Already-registered users always pass.
 - **Max users** — `max_users` caps how many people can register through OIDC; once reached, new sign-ins are rejected with "registration is closed". `0` = unlimited.
+- **OIDC only** — set `disable_password_login = true` (or `GPIX_DISABLE_PASSWORD_LOGIN=true`) to hide the username/password form entirely and allow only Logto sign-in. It's ignored unless Logto is configured, so you can't accidentally lock yourself out.
 - Registered identities are stored in `users.db` (next to `secret.key`). Sessions are the same signed cookies as password login, so nothing else in the app changes.
 
 > gpix is single-tenant: everyone who signs in shares the same Google Photos library. Logto here controls **who may use this gpix**, not separate per-user libraries.
+
+---
+
+## Import from Immich
+
+Migrate an existing [Immich](https://immich.app) library into gpix. gpix connects to your Immich server as a **client** (with an Immich API key), lists every asset, downloads each original, and uploads it into gpix — through the same path as a normal upload, so **encryption and disguising apply if enabled**, and gpix's SHA-1 dedup skips anything already present.
+
+**Use it:** web UI → **Import** (top nav) → enter your Immich **server URL** and an **API key** (create one in Immich under *Account Settings → API Keys*), pick how many **parallel transfers** to run (1–10), then **Start import**. Progress (done / skipped / failed / total + current file) updates live, and the job keeps running in the background if you navigate away. There's a **Stop** button, and re-running is safe — imported asset IDs are recorded in `import.db`, so a second run only copies what's new.
+
+> Notes: the importer enumerates the whole library via Immich's **timeline-bucket** API (`/api/timeline/buckets` + `/api/timeline/bucket`), which is robust across Immich versions — an earlier build used search pagination and stopped after one page. Duplicates are skipped two ways: by **Immich asset ID** (in `import.db`, for cheap re-runs) and by gpix's own **SHA-1** content dedup against your Google Photos library (effective for unencrypted items; encrypted uploads use a random salt so only the asset-ID check applies). Parallelism is capped at 10 — higher is faster but uses more bandwidth and disk (each worker buffers a temp file).
+
+---
+
+## App API (`/api/v1`)
+
+gpix exposes a small JSON API for native clients — the **gpix app** (Flutter, cross-platform) and any script or tool. It reuses the same library cache, decrypt-on-serve, thumbnail, and upload pipeline as the web UI, so encrypted items are served **decrypted** to an authenticated client.
+
+**Auth — API tokens.** Web UI → **App** (top nav) → *Generate token*. The full token is shown **once** (copy it then); only a SHA-256 hash is stored, and you can revoke it anytime. Send it as a bearer header on every request:
+
+```
+Authorization: Bearer gpix_xxxxxxxx…
+```
+
+Tokens live in `api-tokens.db` (git-ignored, next to `secret.key`).
+
+**Endpoints:**
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /api/v1/ping` | Validate server + token; returns user, whether encryption is on, and feature flags. |
+| `GET /api/v1/media?cursor=&limit=` | Page the library (newest-first). Returns items with `key`, `name`, `class` (photo/video/doc/file), `encrypted`, `size`, `mtime`, and `thumb`/`original` URLs, plus `nextCursor`. |
+| `GET /api/v1/media/{key}/thumb?size=` | Thumbnail (decrypted/rendered for disguised items). `size` ∈ 64/128/256/512/1024/2048. |
+| `GET /api/v1/media/{key}/original?download=1` | Decrypted original bytes; `download=1` forces an attachment. |
+| `POST /api/v1/upload` | Multipart (`files`, optional `quality`), uploaded through the encryption/disguise path. |
+| `DELETE /api/v1/media/{key}` | Move an item to trash. |
+| `GET /api/v1/shares` · `POST /api/v1/shares` · `DELETE /api/v1/shares/{token}` | List / create / revoke share links. |
+| `GET /api/v1/import/status` · `POST /api/v1/import/start` · `POST /api/v1/import/stop` | Drive the Immich importer. |
+
+**Quick check:**
+
+```bash
+curl -H "Authorization: Bearer <token>" https://your-server/api/v1/ping
+curl -H "Authorization: Bearer <token>" "https://your-server/api/v1/media?limit=50"
+```
+
+> The cross-platform **gpix app** (Android / iOS / Linux / macOS, built with Flutter + Material 3) is built on this API — see [`app/`](app) and its [README](app/README.md) for build/run instructions.
 
 ---
 
@@ -444,11 +493,32 @@ Or with Compose (`docker compose up -d` — see `docker-compose.yml`). The image
 
 ---
 
+## Releases & CI
+
+**CI** (`.github/workflows/ci.yml`) runs on every push and pull request: it builds, vets, and tests the Go server, and analyzes + builds the Flutter app. Since the app's platform folders are generated (and git-ignored), CI runs `flutter create` first — exactly what a fresh checkout does.
+
+**Releases** (`.github/workflows/release.yml`) run when you push a version tag (or from the Actions tab via *workflow_dispatch*):
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+That publishes a GitHub Release containing:
+
+- **Server binaries** — Linux, macOS, and Windows for amd64 + arm64, cross-compiled from a single runner (the server is CGO-free), with `checksums-server.txt`.
+- **App builds** — Android APK, a Linux desktop bundle, and an (unsigned) macOS app.
+
+iOS is intentionally excluded — App Store / device installs require code signing; build it locally per [`app/README.md`](app/README.md).
+
+---
+
 ## Trust model
 
 - **Your photos stay in your Google account.** If you stop using gpix tomorrow, everything is still there in the regular Google Photos app/web.
 - **No third party.** The binary talks directly to Google. No relay servers, no analytics, no telemetry.
 - **Auth tokens stay local.** `GP_AUTH_DATA` lives in `.env` on your machine and never leaves it except to authenticate to Google.
+- **API tokens grant full access.** An `/api/v1` token (used by the app) can read, upload, delete, and share your whole library — treat it like a password. Only a SHA-256 hash is stored server-side (`api-tokens.db`), and any token is revocable from the web UI → **App** tab. The app keeps its copy in the device's local preferences.
 - **Single shared library.** gpix is single-tenant: the password login (and any Logto users you allow) all share the same Google Photos backend. Logto's allowlist + max-users control *who may sign in*, not separate per-user libraries.
 - **Binds `0.0.0.0` by default** (all interfaces) for convenience. Switch to `127.0.0.1` to keep it local, or put it behind a reverse proxy with TLS for remote access. The S3 and WebDAV gateways follow the same rule — see the network-exposure note above.
 

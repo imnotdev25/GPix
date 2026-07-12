@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"gpix/pkg/apitoken"
 	"gpix/pkg/gpmc"
 	"gpix/pkg/gwcreds"
 	"gpix/pkg/immichimport"
@@ -40,6 +41,7 @@ type Server struct {
 	oidc           *oidc.Client
 	users          *users.Store
 	importer       *immichimport.Importer
+	apitokens      *apitoken.Store
 	log            *slog.Logger
 	httpSrv        *http.Server
 	urlCache       *urlCache
@@ -57,7 +59,7 @@ type Server struct {
 // credentials store, crypt the media-encryption manager, and sh the share store
 // backing the public /s/ links. Any of them may be nil to disable the related
 // feature.
-func New(cfg Config, gp *gpmc.Client, lib *library.Cache, gw *gwcreds.Store, crypt *mediacrypt.Manager, sh *share.Store, oc *oidc.Client, us *users.Store, imp *immichimport.Importer, log *slog.Logger) (*Server, error) {
+func New(cfg Config, gp *gpmc.Client, lib *library.Cache, gw *gwcreds.Store, crypt *mediacrypt.Manager, sh *share.Store, oc *oidc.Client, us *users.Store, imp *immichimport.Importer, at *apitoken.Store, log *slog.Logger) (*Server, error) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -82,6 +84,7 @@ func New(cfg Config, gp *gpmc.Client, lib *library.Cache, gw *gwcreds.Store, cry
 		oidc:           oc,
 		users:          us,
 		importer:       imp,
+		apitokens:      at,
 		log:            log,
 		urlCache:       newURLCache(gp),
 		progressBus:    newProgressBus(),

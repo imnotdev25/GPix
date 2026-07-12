@@ -31,6 +31,10 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /settings/import/status", s.requireSession(s.handleImportStatus))
 	mux.HandleFunc("POST /settings/import/stop", s.requireSession(s.handleImportStop))
 
+	mux.HandleFunc("GET /settings/api-tokens", s.requireSession(s.handleAPITokensPage))
+	mux.HandleFunc("POST /settings/api-tokens/create", s.requireSession(s.handleAPITokenCreate))
+	mux.HandleFunc("POST /settings/api-tokens/revoke/{id}", s.requireSession(s.handleAPITokenRevoke))
+
 	mux.HandleFunc("GET /settings/gateways", s.requireSession(s.handleGateways))
 	mux.HandleFunc("POST /settings/gateways/regenerate", s.requireSession(s.handleGatewaysRegenerate))
 	mux.HandleFunc("POST /settings/gateways/clear", s.requireSession(s.handleGatewaysClear))
@@ -50,6 +54,20 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /s/{token}", s.handleSharePassword)
 	mux.HandleFunc("GET /s/{token}/thumb/{idx}", s.handleShareThumb)
 	mux.HandleFunc("GET /s/{token}/raw/{idx}", s.handleShareRaw)
+
+	// JSON API for native clients (Bearer API-token auth). See pkg/web/api.go.
+	mux.HandleFunc("GET /api/v1/ping", s.requireAPIToken(s.apiPing))
+	mux.HandleFunc("GET /api/v1/media", s.requireAPIToken(s.apiMediaList))
+	mux.HandleFunc("GET /api/v1/media/{key}/thumb", s.requireAPIToken(s.apiThumb))
+	mux.HandleFunc("GET /api/v1/media/{key}/original", s.requireAPIToken(s.apiOriginal))
+	mux.HandleFunc("DELETE /api/v1/media/{key}", s.requireAPIToken(s.apiDelete))
+	mux.HandleFunc("POST /api/v1/upload", s.requireAPIToken(s.apiUpload))
+	mux.HandleFunc("GET /api/v1/shares", s.requireAPIToken(s.apiSharesList))
+	mux.HandleFunc("POST /api/v1/shares", s.requireAPIToken(s.apiShareCreate))
+	mux.HandleFunc("DELETE /api/v1/shares/{token}", s.requireAPIToken(s.apiShareRevoke))
+	mux.HandleFunc("GET /api/v1/import/status", s.requireAPIToken(s.apiImportStatus))
+	mux.HandleFunc("POST /api/v1/import/start", s.requireAPIToken(s.apiImportStart))
+	mux.HandleFunc("POST /api/v1/import/stop", s.requireAPIToken(s.apiImportStop))
 
 	sub, _ := fs.Sub(staticFS, "static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(sub)))

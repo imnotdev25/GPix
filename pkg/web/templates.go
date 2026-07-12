@@ -6,6 +6,8 @@ import (
 	"html/template"
 	"net/http"
 	"time"
+
+	"gpix/pkg/apitoken"
 )
 
 func (s *Server) loadTemplates() error {
@@ -38,7 +40,7 @@ func (s *Server) loadTemplates() error {
 			return string(out)
 		},
 	}
-	pages := []string{"login", "browse", "view", "upload", "error", "gateways", "shares", "share_public", "import"}
+	pages := []string{"login", "browse", "view", "upload", "error", "gateways", "shares", "share_public", "import", "apitokens"}
 	s.pageTmpls = make(map[string]*template.Template, len(pages))
 	layout, err := tmplFS.ReadFile("templates/layout.html")
 	if err != nil {
@@ -91,6 +93,9 @@ type pageData struct {
 
 	Shares      []shareItem
 	SharePublic *sharePublicView
+
+	APITokens []apitoken.Token
+	NewToken  string // one-time plaintext shown right after creation
 }
 
 type shareItem struct {

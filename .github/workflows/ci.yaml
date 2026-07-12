@@ -1,0 +1,59 @@
+name: ci
+
+# Compile-checks both halves of the project on every push / PR:
+#   - the Go server (build, vet, test)
+#   - the Flutter app (analyze + a real native build)
+# The Flutter platform folders are generated on the fly (they're git-ignored),
+# mirroring the `flutter create .` step from app/README.md.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go (build · vet · test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+      - name: gofmt (advisory)
+        continue-on-error: true
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::warning::These files are not gofmt-clean:"
+            echo "$unformatted"
+          fi
+
+  flutter:
+    name: Flutter (analyze · build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux desktop build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Analyze and build
+        working-directory: app
+        run: |
+          flutter create --platforms=linux --org com.gpix --project-name gpix_app .
+          flutter pub get
+          flutter analyze
+          flutter build linux --debug
