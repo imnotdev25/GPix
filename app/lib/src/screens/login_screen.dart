@@ -40,8 +40,21 @@ class _LoginScreenState extends State<LoginScreen> {
 
   String _friendly(Object e) {
     final s = e.toString();
-    if (s.contains('invalid token') || s.contains('401')) {
-      return 'That token was rejected. Check it and try again.';
+    if (s.contains('invalid token') ||
+        s.contains('missing bearer') ||
+        s.contains('401')) {
+      return 'That token was rejected. Re-copy it from the web UI → App tab.';
+    }
+    if (s.contains('Invalid HTTP header')) {
+      return 'The token has invalid characters — re-copy it (no spaces or newlines).';
+    }
+    if (s.contains('HandshakeException') ||
+        s.toLowerCase().contains('certificate')) {
+      return 'TLS problem reaching the server. If it runs over plain HTTP, '
+          'type the full http:// URL (not just the host).';
+    }
+    if (s.contains('Connection refused') || s.contains('Connection failed')) {
+      return 'Connection refused — is gpix running and reachable at that URL?';
     }
     if (s.contains('SocketException') || s.contains('Failed host lookup')) {
       return 'Could not reach the server. Check the URL and your network.';

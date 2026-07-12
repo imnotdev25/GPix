@@ -7,8 +7,12 @@ import 'models.dart';
 
 /// ApiClient talks to a gpix server's /api/v1 JSON API using a Bearer token.
 class ApiClient {
-  ApiClient({required String baseUrl, required this.token})
-      : baseUrl = normalizeBaseUrl(baseUrl);
+  ApiClient({required String baseUrl, required String token})
+      : baseUrl = normalizeBaseUrl(baseUrl),
+        // Trim aggressively: a pasted token often carries a trailing newline or
+        // spaces, and Dart's http client THROWS on header values containing
+        // newlines — so the request would go out with no Authorization header.
+        token = token.trim();
 
   final String baseUrl;
   final String token;

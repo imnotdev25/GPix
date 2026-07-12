@@ -72,5 +72,5 @@ func (s *Server) routes() http.Handler {
 	sub, _ := fs.Sub(staticFS, "static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(sub)))
 
-	return s.recoverPanic(s.logRequest(s.securityHeaders(mux)))
+	return s.recoverPanic(s.logRequest(s.securityHeaders(s.corsAPI(mux))))
 }

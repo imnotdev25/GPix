@@ -31,8 +31,9 @@ class AppState extends ChangeNotifier {
     final probe = ApiClient(baseUrl: url, token: token);
     await probe.ping(); // throws on failure
     final prefs = await SharedPreferences.getInstance();
+    // Persist the normalized/trimmed values the client actually uses.
     await prefs.setString(_kBaseUrl, probe.baseUrl);
-    await prefs.setString(_kToken, token);
+    await prefs.setString(_kToken, probe.token);
     _client = probe;
     notifyListeners();
   }
