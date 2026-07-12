@@ -46,32 +46,22 @@ func (s *Server) serveThumb(w http.ResponseWriter, r *http.Request, key string, 
 	// thumbnail and the real one is generated in the background. Only the
 	// single-item view (large size) generates synchronously.
 	pending := false // real thumbnail is being generated in the background
-	if s.lib != nil {
-		if it, ok := s.lib.Peek(key); ok {
-			display, class, disguised := classifyItem(it.Filename, it.Kind)
-			canGen := disguised && (class == classDoc || (class == classPhoto && canGenerateThumb(display)))
-			if canGen {
-				kind := "photo"
-				if class == classDoc {
-					kind = "doc"
-				}
-				if data, ct, cached := s.cachedThumbFile(key, size, kind); cached {
-					writeThumb(w, data, ct)
-					return
-				}
-				if size >= 1024 { // single-item view: generate now
-					ctx, cancel := withTimeout(r.Context(), 90*time.Second)
-					data, ct, err := s.thumbBytes(ctx, key, display, size, kind)
-					cancel()
-					if err == nil {
-						writeThumb(w, data, ct)
-						return
-					}
-				} else { // grid: never block — fill in the background
-					s.queueThumb(key, display, size, kind)
-					pending = true
-				}
+	if display, kind, ok := s.thumbGenTarget(r, key); ok {
+		if data, ct, cached := s.cachedThumbFile(key, size, kind); cached {
+			writeThumb(w, data, ct)
+			return
+		}
+		if size >= 1024 { // single-item view: generate now
+			ctx, cancel := withTimeout(r.Context(), 90*time.Second)
+			data, ct, err := s.thumbBytes(ctx, key, display, size, kind)
+			cancel()
+			if err == nil {
+				writeThumb(w, data, ct)
+				return
 			}
+		} else { // grid: never block — fill in the background
+			s.queueThumb(key, display, size, kind)
+			pending = true
 		}
 	}
 
@@ -113,6 +103,42 @@ func (s *Server) serveThumb(w http.ResponseWriter, r *http.Request, key string, 
 		w.Header().Set("Cache-Control", "private, max-age=86400, immutable")
 	}
 	_, _ = io.Copy(w, resp.Body)
+}
+
+// thumbGenTarget decides whether gpix should render this thumbnail locally
+// (an encrypted/disguised photo or document) and returns the display name and
+// kind ("photo"/"doc"). It prefers a client hint — ?name=<display>&enc=1 (or
+// &local=1) — so thumbnailing works even when the library cache isn't warm;
+// otherwise it consults the cache via Peek.
+func (s *Server) thumbGenTarget(r *http.Request, key string) (display, kind string, ok bool) {
+	q := r.URL.Query()
+	if name := q.Get("name"); name != "" && (q.Get("enc") == "1" || q.Get("local") == "1") {
+		switch classForExt(name) {
+		case classDoc:
+			return name, "doc", true
+		case classPhoto:
+			if canGenerateThumb(name) {
+				return name, "photo", true
+			}
+		}
+		return "", "", false
+	}
+	if s.lib != nil {
+		if it, okc := s.lib.Peek(key); okc {
+			d, class, disguised := classifyItem(it.Filename, it.Kind)
+			if disguised {
+				switch class {
+				case classDoc:
+					return d, "doc", true
+				case classPhoto:
+					if canGenerateThumb(d) {
+						return d, "photo", true
+					}
+				}
+			}
+		}
+	}
+	return "", "", false
 }
 
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {

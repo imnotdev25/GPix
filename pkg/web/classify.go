@@ -69,6 +69,22 @@ func classifyItem(filename string, kind gpmc.MediaKind) (display string, class m
 	return filename, classPhoto, false
 }
 
+// classForExt classifies a display name (no disguise ".mp4") purely by its
+// extension. Used when a client hints the name so thumbnailing doesn't depend
+// on the library cache being warm.
+func classForExt(name string) mediaClass {
+	switch ext := strings.ToLower(filepath.Ext(name)); {
+	case imageExts[ext]:
+		return classPhoto
+	case videoExts[ext]:
+		return classVideo
+	case textExts[ext]:
+		return classDoc
+	default:
+		return classFile
+	}
+}
+
 // canGenerateThumb reports whether gpix can build a thumbnail for a decrypted
 // photo. JPEG/PNG/GIF are stdlib; HEIC/HEIF via the CGo-free decoder registered
 // in imagecodecs.go. Other formats (WebP, RAW) fall back to the Google-side

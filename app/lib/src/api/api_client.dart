@@ -36,8 +36,15 @@ class ApiClient {
   }
 
   /// Absolute thumbnail URL for use with an image widget (send authHeaders).
-  String thumbUrl(MediaItem it, {int size = 256}) =>
-      '$baseUrl${it.thumb}?size=$size';
+  /// For encrypted/disguised items it hints the display name so the server can
+  /// render the real thumbnail locally without a warm library cache.
+  String thumbUrl(MediaItem it, {int size = 256}) {
+    final u = '$baseUrl${it.thumb}?size=$size';
+    if (it.encrypted) {
+      return '$u&enc=1&name=${Uri.encodeQueryComponent(it.name)}';
+    }
+    return u;
+  }
 
   /// Absolute original-bytes URL (send authHeaders).
   String originalUrl(MediaItem it, {bool download = false}) =>
