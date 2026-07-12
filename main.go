@@ -18,6 +18,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"gpix/pkg/apitoken"
 	"gpix/pkg/bridge"
 	"gpix/pkg/cachedb"
 	"gpix/pkg/dav"
@@ -272,6 +273,13 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 	}
 	defer shareStore.Close()
 
+	// API tokens for native clients (gpix app) hitting /api/v1.
+	apiTokens, err := apitoken.Open(filepath.Join(filepath.Dir(secretPath), "api-tokens.db"))
+	if err != nil {
+		return fmt.Errorf("api-token store: %w", err)
+	}
+	defer apiTokens.Close()
+
 	// Optional Logto / OIDC login with email allowlist + max-users cap.
 	var (
 		oc *oidc.Client
@@ -299,7 +307,7 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 		log.Info("logto login enabled", "redirect", redirect, "max_users", cfg.MaxUsers, "allowlist", len(cfg.SignupAllowlist))
 	}
 
-	srv, err := web.New(cfg, gp, lib, gw, crypt, shareStore, oc, us, importer, log)
+	srv, err := web.New(cfg, gp, lib, gw, crypt, shareStore, oc, us, importer, apiTokens, log)
 	if err != nil {
 		return fmt.Errorf("web.New: %w", err)
 	}
