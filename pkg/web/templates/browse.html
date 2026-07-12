@@ -60,7 +60,7 @@
         {{.DisplayKind}}
       </span>
       {{else}}
-      <img loading="lazy" src="/thumb/{{.MediaKey}}?size=512" alt="{{.DisplayName}}">
+      <img loading="lazy" src="/thumb/{{.MediaKey}}?size=512" alt="{{.DisplayName}}"{{if .LocalThumb}} data-localthumb="1"{{end}}>
       {{if eq .Class "video"}}
       <span class="media-type">
         <svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -117,6 +117,21 @@
 {{end}}
 {{define "scripts"}}
 <script>
+// Encrypted/disguised photos render their real thumbnail on the server in the
+// background; Google's blue placeholder shows first. Re-fetch just those images
+// a few times so the real thumbnail appears without a manual reload.
+(function(){
+  var pend=document.querySelectorAll('img[data-localthumb]');
+  if(!pend.length)return;
+  [3000,7000,15000,30000].forEach(function(d){
+    setTimeout(function(){
+      pend.forEach(function(img){
+        var base=(img.getAttribute('src')||'').split('&_r=')[0];
+        if(base)img.setAttribute('src', base+'&_r='+Date.now());
+      });
+    },d);
+  });
+})();
 (function(){
   var selectMode=false, selected=new Set();
   var grid=document.querySelector('.media-grid');

@@ -54,6 +54,7 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 			Kind:        int(it.Kind),
 			Class:       string(class),
 			IsDisguised: class == classFile,
+			LocalThumb:  disguised && (class == classDoc || (class == classPhoto && canGenerateThumb(display))),
 			DisplayKind: displayKind,
 			SizeBytes:   it.SizeBytes,
 			Mtime:       it.Mtime,

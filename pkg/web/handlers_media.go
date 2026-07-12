@@ -45,6 +45,7 @@ func (s *Server) serveThumb(w http.ResponseWriter, r *http.Request, key string, 
 	// served instantly; otherwise the grid request returns Google's fast (blank)
 	// thumbnail and the real one is generated in the background. Only the
 	// single-item view (large size) generates synchronously.
+	pending := false // real thumbnail is being generated in the background
 	if s.lib != nil {
 		if it, ok := s.lib.Peek(key); ok {
 			display, class, disguised := classifyItem(it.Filename, it.Kind)
@@ -68,6 +69,7 @@ func (s *Server) serveThumb(w http.ResponseWriter, r *http.Request, key string, 
 					}
 				} else { // grid: never block — fill in the background
 					s.queueThumb(key, display, size, kind)
+					pending = true
 				}
 			}
 		}
@@ -101,7 +103,15 @@ func (s *Server) serveThumb(w http.ResponseWriter, r *http.Request, key string, 
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
-	w.Header().Set("Cache-Control", "private, max-age=86400, immutable")
+	if pending {
+		// The real (decrypted) thumbnail is generating in the background. Serve
+		// Google's blank placeholder only briefly and flag it, so the client can
+		// re-request and pick up the generated thumbnail without a manual reload.
+		w.Header().Set("Cache-Control", "private, max-age=3")
+		w.Header().Set("X-Thumb-Pending", "1")
+	} else {
+		w.Header().Set("Cache-Control", "private, max-age=86400, immutable")
+	}
 	_, _ = io.Copy(w, resp.Body)
 }
 
