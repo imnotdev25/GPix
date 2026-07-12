@@ -1,0 +1,49 @@
+/bin/
+/release/
+*.exe
+*.test
+*.out
+*.dll
+*.so
+*.dylib
+
+# Secrets and runtime state
+.env
+.env.*
+!.env.example
+secret.key
+encryption.key
+*.session
+*.session.bak
+debug.log
+*.log
+gateways.json
+*.db
+*.key
+encryption.json
+
+
+# Local config (provide a *.example template instead)
+gpix-web.conf
+!gpix-web.conf.example
+
+# Backups and temp
+*.bak
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.idea/
+.vscode/
+
+# Go
+*.coverprofile
+coverage.out
+vendor/
+
+# App
+app
+
+# CI/CD
+.github
