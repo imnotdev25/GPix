@@ -49,9 +49,9 @@ class ApiClient {
     return PingInfo.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
   }
 
-  Future<MediaPage> listMedia({int cursor = 0, int limit = 120}) async {
+  Future<MediaPage> listMedia({String cursor = ''}) async {
     final r = await http.get(
-      _uri('/api/v1/media', {'cursor': '$cursor', 'limit': '$limit'}),
+      _uri('/api/v1/media', cursor.isEmpty ? null : {'cursor': cursor}),
       headers: authHeaders,
     );
     _check(r.statusCode, r.body);

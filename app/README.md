@@ -8,6 +8,7 @@ A cross-platform client for a self-hosted **gpix** server, built with **Flutter*
 - **Library** — infinite-scroll photo grid with cached thumbnails (encrypted items are shown **decrypted**).
 - **Viewer** — full-screen, pinch-to-zoom images; download originals; create a share link; delete.
 - **Upload** — pick photos/videos/files and back them up (server-side encryption/disguise applies).
+- **Backup** (Android/iOS) — camera-roll style auto-backup: scans your photo library, skips what's already uploaded, and copies the rest to gpix with live progress; optional auto-run on app open.
 - **Shares** — list, open, copy, and revoke share links.
 - **Import** — drive the Immich → gpix importer (parallel workers) with live progress.
 - **Settings** — connection status, encryption indicator, sign out.
@@ -84,6 +85,23 @@ To distribute without warnings you need an **Apple Developer ID** certificate an
   ```
 
 - **Android + plain HTTP:** if your gpix server is `http://` (no TLS), Android blocks cleartext traffic on API 28+. Prefer **HTTPS**. If you must use HTTP, add `android:usesCleartextTraffic="true"` to `<application>` in `android/app/src/main/AndroidManifest.xml` (or a proper network-security-config). `INTERNET` permission is granted by default.
+- **Photo backup permissions:** the Backup tab reads your photo library via `photo_manager`, which needs OS permission declarations the generated platform files don't include.
+  - **Android** — add inside `<manifest>` in `android/app/src/main/AndroidManifest.xml`:
+
+    ```xml
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
+    ```
+
+  - **iOS** — add to `ios/Runner/Info.plist`:
+
+    ```xml
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>gpix backs up your photos and videos to your own server.</string>
+    ```
+
+  Backup runs while the app is open; true OS-scheduled background backup (Android WorkManager / iOS BGTaskScheduler) is a future addition.
 - **Self-signed TLS:** the app uses the platform's default TLS validation. Use a real certificate (e.g. Let's Encrypt / a reverse proxy) or install your CA on the device.
 
 ## Security note

@@ -208,6 +208,7 @@ type listingItem struct {
 	Kind        int
 	Class       string // "photo" | "video" | "file"
 	IsDisguised bool
+	LocalThumb  bool // gpix renders this thumbnail locally (may be pending)
 	DisplayKind string
 	SizeBytes   int64
 	Mtime       time.Time

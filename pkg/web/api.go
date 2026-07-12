@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -88,39 +87,28 @@ type apiMediaItem struct {
 	Original  string    `json:"original"`
 }
 
-// apiMediaList returns a page of library items. Pagination is a simple integer
-// offset (cursor) over the in-memory library cache, which is fast and stable.
+// apiMediaList returns one page of library items using Google's native cursor
+// pagination. This returns the first page immediately instead of listing the
+// entire library up front (which made the first request hang on large
+// libraries). `cursor` is the opaque token from the previous page's
+// `nextCursor` (empty for the first page); `nextCursor` is empty when done.
 func (s *Server) apiMediaList(w http.ResponseWriter, r *http.Request) {
-	if s.lib == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "library not ready")
-		return
-	}
-	ctx, cancel := withTimeout(r.Context(), 60*time.Second)
+	ctx, cancel := withTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	all, err := s.lib.All(ctx)
+	cursor := r.URL.Query().Get("cursor")
+	if allDigits(cursor) {
+		// An older app build sent an integer offset here. That is not a valid
+		// Google resume token (it makes lib-state 400 "invalid argument"), so
+		// treat it as "first page" instead of erroring.
+		cursor = ""
+	}
+	page, err := s.gp.ListPage(ctx, cursor)
 	if err != nil {
 		writeAPIError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-
-	offset := atoiDefault(r.URL.Query().Get("cursor"), 0)
-	if offset < 0 || offset > len(all) {
-		offset = len(all)
-	}
-	limit := atoiDefault(r.URL.Query().Get("limit"), 100)
-	if limit <= 0 {
-		limit = 100
-	}
-	if limit > 500 {
-		limit = 500
-	}
-	end := offset + limit
-	if end > len(all) {
-		end = len(all)
-	}
-
-	items := make([]apiMediaItem, 0, end-offset)
-	for _, it := range all[offset:end] {
+	items := make([]apiMediaItem, 0, len(page.Items))
+	for _, it := range page.Items {
 		display, class, disguised := classifyItem(it.Filename, it.Kind)
 		items = append(items, apiMediaItem{
 			Key:       it.MediaKey,
@@ -133,14 +121,9 @@ func (s *Server) apiMediaList(w http.ResponseWriter, r *http.Request) {
 			Original:  "/api/v1/media/" + it.MediaKey + "/original",
 		})
 	}
-	next := ""
-	if end < len(all) {
-		next = strconv.Itoa(end)
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items":      items,
-		"nextCursor": next,
-		"total":      len(all),
+		"nextCursor": page.NextToken,
 	})
 }
 
@@ -412,15 +395,17 @@ func (s *Server) apiImportStop(w http.ResponseWriter, r *http.Request) {
 
 // ---- small helpers ---------------------------------------------------------
 
-func atoiDefault(s string, def int) int {
+// allDigits reports whether s is non-empty and only ASCII digits.
+func allDigits(s string) bool {
 	if s == "" {
-		return def
+		return false
 	}
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return def
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
 	}
-	return n
+	return true
 }
 
 // parseUploadResult splits the tab-delimited line returned by uploadOne

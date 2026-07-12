@@ -17,10 +17,9 @@ class LibraryScreen extends StatefulWidget {
 class _LibraryScreenState extends State<LibraryScreen> {
   final _scroll = ScrollController();
   final List<MediaItem> _items = [];
-  String _cursor = '0';
+  String _cursor = '';
   bool _loading = false;
   bool _hasMore = true;
-  int _total = 0;
   String? _error;
 
   @override
@@ -48,7 +47,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Future<void> _refresh() async {
     setState(() {
       _items.clear();
-      _cursor = '0';
+      _cursor = '';
       _hasMore = true;
       _error = null;
     });
@@ -59,11 +58,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
     if (_loading || !_hasMore) return;
     setState(() => _loading = true);
     try {
-      final page =
-          await _client.listMedia(cursor: int.tryParse(_cursor) ?? 0);
+      final page = await _client.listMedia(cursor: _cursor);
       setState(() {
         _items.addAll(page.items);
-        _total = page.total;
         _cursor = page.nextCursor;
         _hasMore = page.nextCursor.isNotEmpty;
         _error = null;
@@ -88,7 +85,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_total > 0 ? 'Library · $_total' : 'Library'),
+        title: Text(_items.isNotEmpty ? 'Library · ${_items.length} loaded' : 'Library'),
         actions: [
           IconButton(
             onPressed: _refresh,
