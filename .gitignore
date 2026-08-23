@@ -52,3 +52,5 @@ vendor/
 /go-test*.jpg
 /*.mp4
 /libstate*.bin
+
+node_modules
