@@ -53,7 +53,7 @@ func (m webMultiCloser) Close() error {
 // openDecrypted opens the true original bytes for a media key: it resolves the
 // download URL, un-disguises and decrypts as needed. The caller closes it.
 func (s *Server) openDecrypted(ctx context.Context, mediaKey string) (io.ReadCloser, string, error) {
-	url, err := s.urlCache.Get(ctx, mediaKey)
+	url, err := s.urls().Get(ctx, mediaKey)
 	if err != nil {
 		return nil, "", err
 	}
@@ -63,8 +63,8 @@ func (s *Server) openDecrypted(ctx context.Context, mediaKey string) (io.ReadClo
 	}
 	if resp.StatusCode == 403 || resp.StatusCode == 410 {
 		resp.Body.Close()
-		s.urlCache.Invalidate(mediaKey)
-		if url, err = s.urlCache.Get(ctx, mediaKey); err != nil {
+		s.urls().Invalidate(mediaKey)
+		if url, err = s.urls().Get(ctx, mediaKey); err != nil {
 			return nil, "", err
 		}
 		if resp, _, err = s.doProxyGet(ctx, url, mediaKey, true); err != nil {

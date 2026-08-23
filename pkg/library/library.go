@@ -195,6 +195,25 @@ func (c *Cache) Peek(mediaKey string) (gpmc.MediaItem, bool) {
 	return it, ok
 }
 
+// WarmUp blocks until the cache has data or maxWait elapses. Startup calls it
+// (right after Start, which kicks an eager refresh) so the first S3/WebDAV
+// listing serves from memory instead of triggering a cold, full walk of the
+// Google library while a client waits and times out. It only waits for the
+// refresh Start already launched — it never starts its own — so a very large
+// first-run library just keeps warming in the background past the deadline.
+// Returns whether the cache ended up warm. A persisted snapshot (see cachedb)
+// makes this return immediately on every run after the first.
+func (c *Cache) WarmUp(ctx context.Context, maxWait time.Duration) bool {
+	deadline := time.Now().Add(maxWait)
+	for !c.hasData() {
+		if ctx.Err() != nil || time.Now().After(deadline) {
+			return c.hasData()
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return true
+}
+
 // Invalidate forces the next access to refresh (call after uploads/deletes).
 func (c *Cache) Invalidate() {
 	c.mu.Lock()

@@ -15,9 +15,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /auth/logto/login", s.handleLogtoLogin)
 	mux.HandleFunc("GET /auth/logto/callback", s.handleLogtoCallback)
 
-	mux.HandleFunc("GET /{$}", s.requireSession(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/browse", http.StatusSeeOther)
-	}))
+	// "/" is served by the React SPA (registered at the bottom). The legacy
+	// server-rendered pages remain available at their own paths.
 	mux.HandleFunc("GET /browse", s.requireSession(s.handleBrowse))
 	mux.HandleFunc("GET /view/{key}", s.requireSession(s.handleView))
 	mux.HandleFunc("GET /thumb/{key}", s.requireSession(s.handleThumb))
@@ -31,6 +30,12 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /settings/import/google-start", s.requireSession(s.handleImportGoogleStart))
 	mux.HandleFunc("GET /settings/import/status", s.requireSession(s.handleImportStatus))
 	mux.HandleFunc("POST /settings/import/stop", s.requireSession(s.handleImportStop))
+
+	mux.HandleFunc("GET /settings/accounts", s.requireSession(s.handleAccountsPage))
+	mux.HandleFunc("POST /settings/accounts/add", s.requireSession(s.handleAccountAdd))
+	mux.HandleFunc("POST /settings/accounts/{id}/switch", s.requireSession(s.handleAccountSwitch))
+	mux.HandleFunc("POST /settings/accounts/{id}/remove", s.requireSession(s.handleAccountRemove))
+	mux.HandleFunc("POST /settings/accounts/{id}/rename", s.requireSession(s.handleAccountRename))
 
 	mux.HandleFunc("GET /settings/api-tokens", s.requireSession(s.handleAPITokensPage))
 	mux.HandleFunc("POST /settings/api-tokens/create", s.requireSession(s.handleAPITokenCreate))
@@ -68,12 +73,36 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/shares", s.requireAPIToken(s.apiSharesList))
 	mux.HandleFunc("POST /api/v1/shares", s.requireAPIToken(s.apiShareCreate))
 	mux.HandleFunc("DELETE /api/v1/shares/{token}", s.requireAPIToken(s.apiShareRevoke))
+	// Auth for the SPA (session-cookie based; no token needed to check/login).
+	mux.HandleFunc("GET /api/v1/auth/me", s.apiAuthMe)
+	mux.HandleFunc("POST /api/v1/auth/login", s.apiAuthLogin)
+	mux.HandleFunc("POST /api/v1/auth/logout", s.apiAuthLogout)
+
+	mux.HandleFunc("GET /api/v1/gateways", s.requireAPIToken(s.apiGateways))
+	mux.HandleFunc("POST /api/v1/gateways/regenerate", s.requireAPIToken(s.apiGatewaysRegenerate))
+	mux.HandleFunc("POST /api/v1/gateways/clear", s.requireAPIToken(s.apiGatewaysClear))
+	mux.HandleFunc("POST /api/v1/encryption/toggle", s.requireAPIToken(s.apiEncryptionToggle))
+
+	mux.HandleFunc("GET /api/v1/tokens", s.requireAPIToken(s.apiTokensList))
+	mux.HandleFunc("POST /api/v1/tokens", s.requireAPIToken(s.apiTokensCreate))
+	mux.HandleFunc("DELETE /api/v1/tokens/{id}", s.requireAPIToken(s.apiTokensRevoke))
+
+	mux.HandleFunc("POST /api/v1/delete-all", s.requireAPIToken(s.apiDeleteAll))
+
+	mux.HandleFunc("GET /api/v1/accounts", s.requireAPIToken(s.apiAccounts))
+	mux.HandleFunc("POST /api/v1/accounts/{id}/switch", s.requireAPIToken(s.apiAccountSwitch))
 	mux.HandleFunc("GET /api/v1/import/status", s.requireAPIToken(s.apiImportStatus))
 	mux.HandleFunc("POST /api/v1/import/start", s.requireAPIToken(s.apiImportStart))
+	mux.HandleFunc("POST /api/v1/import/google-start", s.requireAPIToken(s.apiImportGoogleStart))
 	mux.HandleFunc("POST /api/v1/import/stop", s.requireAPIToken(s.apiImportStop))
 
 	sub, _ := fs.Sub(staticFS, "static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(sub)))
+
+	// The React SPA handles everything not matched above (its own routing lives
+	// client-side). Registered on "/" so the more specific patterns win; the
+	// legacy server-rendered pages stay reachable at their existing paths.
+	mux.Handle("GET /", s.spaHandler())
 
 	return s.recoverPanic(s.logRequest(s.securityHeaders(s.corsAPI(mux))))
 }

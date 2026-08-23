@@ -10,6 +10,8 @@ require (
 require github.com/amarnathcjd/gogram v1.7.3
 
 require (
+	github.com/gen2brain/heic v0.7.1
+	github.com/rwcarlsen/goexif v0.0.0-20190401172101-9e8deecbddbd
 	golang.org/x/crypto v0.53.0
 	golang.org/x/image v0.43.0
 	modernc.org/sqlite v1.52.0
@@ -18,7 +20,6 @@ require (
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/ebitengine/purego v0.10.1 // indirect
-	github.com/gen2brain/heic v0.7.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect

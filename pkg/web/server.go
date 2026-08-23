@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"gpix/pkg/accounts"
 	"gpix/pkg/apitoken"
 	"gpix/pkg/gpmc"
 	"gpix/pkg/gwcreds"
@@ -33,8 +34,8 @@ var staticFS embed.FS
 
 type Server struct {
 	cfg            Config
-	gp             *gpmc.Client
-	lib            *library.Cache
+	accts          *accounts.Manager
+	urlCaches      sync.Map // account id -> *urlCache (download URLs are per-account)
 	gw             *gwcreds.Store
 	crypt          *mediacrypt.Manager
 	share          *share.Store
@@ -44,7 +45,6 @@ type Server struct {
 	apitokens      *apitoken.Store
 	log            *slog.Logger
 	httpSrv        *http.Server
-	urlCache       *urlCache
 	progressBus    *progressBus
 	sessionSignKey []byte
 	mediaSignKey   []byte
@@ -59,7 +59,7 @@ type Server struct {
 // credentials store, crypt the media-encryption manager, and sh the share store
 // backing the public /s/ links. Any of them may be nil to disable the related
 // feature.
-func New(cfg Config, gp *gpmc.Client, lib *library.Cache, gw *gwcreds.Store, crypt *mediacrypt.Manager, sh *share.Store, oc *oidc.Client, us *users.Store, imp *immichimport.Importer, at *apitoken.Store, log *slog.Logger) (*Server, error) {
+func New(cfg Config, accts *accounts.Manager, gw *gwcreds.Store, crypt *mediacrypt.Manager, sh *share.Store, oc *oidc.Client, us *users.Store, imp *immichimport.Importer, at *apitoken.Store, log *slog.Logger) (*Server, error) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -76,8 +76,7 @@ func New(cfg Config, gp *gpmc.Client, lib *library.Cache, gw *gwcreds.Store, cry
 
 	s := &Server{
 		cfg:            cfg,
-		gp:             gp,
-		lib:            lib,
+		accts:          accts,
 		gw:             gw,
 		crypt:          crypt,
 		share:          sh,
@@ -86,13 +85,12 @@ func New(cfg Config, gp *gpmc.Client, lib *library.Cache, gw *gwcreds.Store, cry
 		importer:       imp,
 		apitokens:      at,
 		log:            log,
-		urlCache:       newURLCache(gp),
 		progressBus:    newProgressBus(),
 		sessionSignKey: deriveKey(cfg.SecretKey, "session"),
 		mediaSignKey:   deriveKey(cfg.SecretKey, "media"),
 		tempSemaphore:  make(chan struct{}, cfg.MaxConcurrentUploads),
 		thumbDir:       thumbDir,
-		thumbSem:       make(chan struct{}, 3),
+		thumbSem:       make(chan struct{}, 6), // parallel background thumbnail generation
 	}
 	if err := s.loadTemplates(); err != nil {
 		return nil, fmt.Errorf("web: load templates: %w", err)
@@ -104,6 +102,28 @@ func New(cfg Config, gp *gpmc.Client, lib *library.Cache, gw *gwcreds.Store, cry
 		IdleTimeout:       2 * time.Minute,
 	}
 	return s, nil
+}
+
+// --- active-account accessors -------------------------------------------------
+//
+// Every handler resolves its Google client, listing cache and signed-URL cache
+// through these, so switching accounts takes effect everywhere at once.
+
+// gpc returns the active account's Google Photos client.
+func (s *Server) gpc() *gpmc.Client { return s.accts.Active().GP }
+
+// libc returns the active account's listing cache.
+func (s *Server) libc() *library.Cache { return s.accts.Active().Lib }
+
+// urls returns the signed-download-URL cache for the active account. URLs are
+// account-scoped, so each account gets its own.
+func (s *Server) urls() *urlCache {
+	rt := s.accts.Active()
+	if c, ok := s.urlCaches.Load(rt.ID); ok {
+		return c.(*urlCache)
+	}
+	c, _ := s.urlCaches.LoadOrStore(rt.ID, newURLCache(rt.GP))
+	return c.(*urlCache)
 }
 
 func (s *Server) Run(ctx context.Context) error {

@@ -144,7 +144,12 @@ func (s *Server) uploadOne(r *http.Request, src io.Reader, name string, quality 
 	}
 
 	s.progressBus.Publish(uploadID, "uploading "+displayName+" to google photos…")
-	res, err := s.gp.UploadFileWithProgress(r.Context(), uploadPath, gpmc.UploadOpts{Quality: quality, OverrideName: commitName}, func(ev gpmc.UploadEvent) {
+	upOpts := gpmc.UploadOpts{Quality: quality, OverrideName: commitName}
+	// Prefer the photo's real capture date (EXIF) over the upload time.
+	if dt, ok := gpmc.ExifDate(tmpPath); ok {
+		upOpts.Mtime = dt
+	}
+	res, err := s.gpc().UploadFileWithProgress(r.Context(), uploadPath, upOpts, func(ev gpmc.UploadEvent) {
 		s.progressBus.Publish(uploadID, fmt.Sprintf("%s · %s · %d/%d", displayName, ev.Stage.String(), ev.BytesDone, ev.BytesTotal))
 	})
 	if err != nil {

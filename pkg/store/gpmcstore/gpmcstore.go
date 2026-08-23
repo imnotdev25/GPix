@@ -321,10 +321,13 @@ func (b *Backend) Put(ctx context.Context, key string, r io.Reader, _ int64, con
 		}
 	}
 
-	res, err := b.gp.UploadFile(ctx, uploadPath, gpmc.UploadOpts{
-		Quality:      b.opts.Quality,
-		OverrideName: commitName,
-	})
+	upOpts := gpmc.UploadOpts{Quality: b.opts.Quality, OverrideName: commitName}
+	// Use the photo's real capture date (EXIF) as its timestamp, not the upload
+	// time — read from the plaintext temp (before any encryption/disguise).
+	if dt, ok := gpmc.ExifDate(tmpPath); ok {
+		upOpts.Mtime = dt
+	}
+	res, err := b.gp.UploadFile(ctx, uploadPath, upOpts)
 	if err != nil {
 		return store.Object{}, fmt.Errorf("gpmcstore: upload: %w", err)
 	}

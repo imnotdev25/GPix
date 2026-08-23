@@ -26,28 +26,36 @@ func writeAPIError(w http.ResponseWriter, code int, msg string) {
 
 // ---- auth middleware -------------------------------------------------------
 
-// requireAPIToken authenticates a request via `Authorization: Bearer <token>`
-// against the API-token store. On success it puts the token label in the
-// request context (prefixed "api:") so downstream reuse of session-oriented
-// helpers still works.
+// requireAPIToken authenticates a request either with `Authorization: Bearer
+// <token>` (native clients) or with the browser session cookie (the built-in
+// SPA, which is same-origin). On success the caller's identity goes in the
+// request context so session-oriented helpers keep working.
 func (s *Server) requireAPIToken(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.apitokens == nil {
-			writeAPIError(w, http.StatusNotFound, "api disabled")
+		if tok := bearerToken(r); tok != "" {
+			if s.apitokens == nil {
+				writeAPIError(w, http.StatusNotFound, "api tokens unavailable")
+				return
+			}
+			t, ok := s.apitokens.Verify(r.Context(), tok)
+			if !ok {
+				writeAPIError(w, http.StatusUnauthorized, "invalid token")
+				return
+			}
+			ctx := context.WithValue(r.Context(), ctxKeyUser, "api:"+t.Label)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
-		tok := bearerToken(r)
-		if tok == "" {
-			writeAPIError(w, http.StatusUnauthorized, "missing bearer token")
-			return
+		// Session cookie (SPA). Cookies are SameSite=Lax, so cross-site POSTs
+		// don't carry them; same-origin fetches from the SPA do.
+		if c, err := r.Cookie(sessionCookieName); err == nil {
+			if user, verr := s.verifySession(c.Value); verr == nil {
+				ctx := context.WithValue(r.Context(), ctxKeyUser, user)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
 		}
-		t, ok := s.apitokens.Verify(r.Context(), tok)
-		if !ok {
-			writeAPIError(w, http.StatusUnauthorized, "invalid token")
-			return
-		}
-		ctx := context.WithValue(r.Context(), ctxKeyUser, "api:"+t.Label)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		writeAPIError(w, http.StatusUnauthorized, "authentication required")
 	}
 }
 
@@ -102,7 +110,7 @@ func (s *Server) apiMediaList(w http.ResponseWriter, r *http.Request) {
 		// treat it as "first page" instead of erroring.
 		cursor = ""
 	}
-	page, err := s.gp.ListPage(ctx, cursor)
+	page, err := s.gpc().ListPage(ctx, cursor)
 	if err != nil {
 		writeAPIError(w, http.StatusBadGateway, err.Error())
 		return
@@ -188,8 +196,8 @@ func (s *Server) apiUpload(w http.ResponseWriter, r *http.Request) {
 			results = append(results, map[string]string{"name": name, "status": status, "key": key})
 		}
 	}
-	if s.lib != nil {
-		s.lib.Invalidate()
+	if lib := s.libc(); lib != nil {
+		lib.Invalidate()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
@@ -203,7 +211,7 @@ func (s *Server) apiDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := withTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	res, err := s.gp.DeleteByMediaKeys(ctx, []string{key}, false)
+	res, err := s.gpc().DeleteByMediaKeys(ctx, []string{key}, false)
 	if err != nil {
 		writeAPIError(w, http.StatusBadGateway, err.Error())
 		return
@@ -212,8 +220,8 @@ func (s *Server) apiDelete(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadGateway, e.Error())
 		return
 	}
-	if s.lib != nil {
-		s.lib.Invalidate()
+	if lib := s.libc(); lib != nil {
+		lib.Invalidate()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
@@ -301,8 +309,8 @@ func (s *Server) apiShareCreate(w http.ResponseWriter, r *http.Request) {
 	for _, key := range body.Keys {
 		name := key
 		isVideo := false
-		if s.lib != nil {
-			if it, ok := s.lib.Peek(key); ok {
+		if lib := s.libc(); lib != nil {
+			if it, ok := lib.Peek(key); ok {
 				display, class, _ := classifyItem(it.Filename, it.Kind)
 				name = display
 				isVideo = class == classVideo
@@ -378,6 +386,35 @@ func (s *Server) apiImportStart(w http.ResponseWriter, r *http.Request) {
 		body.Workers = 3
 	}
 	if err := s.importer.Start(body.ServerURL, body.APIKey, body.Workers); err != nil {
+		writeAPIError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// apiImportGoogleStart imports another Google account's library (given its
+// GP_AUTH_DATA) into the active account.
+func (s *Server) apiImportGoogleStart(w http.ResponseWriter, r *http.Request) {
+	if s.importer == nil {
+		writeAPIError(w, http.StatusNotFound, "import unavailable")
+		return
+	}
+	var body struct {
+		AuthData string `json:"authData"`
+		Workers  int    `json:"workers"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "bad json: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(body.AuthData) == "" {
+		writeAPIError(w, http.StatusBadRequest, "authData required")
+		return
+	}
+	if body.Workers <= 0 {
+		body.Workers = 3
+	}
+	if err := s.importer.StartGoogle(body.AuthData, body.Workers); err != nil {
 		writeAPIError(w, http.StatusConflict, err.Error())
 		return
 	}

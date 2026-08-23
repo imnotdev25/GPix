@@ -327,7 +327,10 @@ p { margin: 0; }
 /* ===== MEDIA GRID ===== */
 .media-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  /* Cap at 6 columns (each column is at least 1/6 of the width), min 150px, so
+     wide screens show 4-6 larger tiles instead of many tiny ones — fewer
+     thumbnails load at once. */
+  grid-template-columns: repeat(auto-fill, minmax(max(150px, calc((100% - 50px) / 6)), 1fr));
   gap: 10px;
 }
 @media (max-width: 720px) {

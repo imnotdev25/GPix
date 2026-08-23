@@ -68,7 +68,7 @@ func (s *Server) serveThumb(w http.ResponseWriter, r *http.Request, key string, 
 	ctx, cancel := withTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
-	tok, err := s.gp.BearerToken(ctx)
+	tok, err := s.gpc().BearerToken(ctx)
 	if err != nil {
 		http.Error(w, "bearer: "+err.Error(), 500)
 		return
@@ -80,7 +80,7 @@ func (s *Server) serveThumb(w http.ResponseWriter, r *http.Request, key string, 
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+tok)
-	resp, err := s.gp.HTTPClient().Do(req)
+	resp, err := s.gpc().HTTPClient().Do(req)
 	if err != nil {
 		http.Error(w, err.Error(), 502)
 		return
@@ -123,8 +123,8 @@ func (s *Server) thumbGenTarget(r *http.Request, key string) (display, kind stri
 		}
 		return "", "", false
 	}
-	if s.lib != nil {
-		if it, okc := s.lib.Peek(key); okc {
+	if lib := s.libc(); lib != nil {
+		if it, okc := lib.Peek(key); okc {
 			d, class, disguised := classifyItem(it.Filename, it.Kind)
 			if disguised {
 				switch class {
@@ -150,7 +150,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := withTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	manifest, err := s.gp.GetStreamManifest(ctx, key, "hls")
+	manifest, err := s.gpc().GetStreamManifest(ctx, key, "hls")
 	if err != nil {
 		s.proxyDownload(w, r, key, false)
 		return
@@ -193,7 +193,7 @@ func (s *Server) proxyDownload(w http.ResponseWriter, r *http.Request, mediaKey 
 	ctx, cancel := withTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
 
-	url, err := s.urlCache.Get(ctx, mediaKey)
+	url, err := s.urls().Get(ctx, mediaKey)
 	if err != nil {
 		http.Error(w, "resolve: "+err.Error(), http.StatusBadGateway)
 		return
@@ -206,8 +206,8 @@ func (s *Server) proxyDownload(w http.ResponseWriter, r *http.Request, mediaKey 
 	defer resp.Body.Close()
 	if (resp.StatusCode == 403 || resp.StatusCode == 410) && !retried {
 		resp.Body.Close()
-		s.urlCache.Invalidate(mediaKey)
-		url, err = s.urlCache.Get(ctx, mediaKey)
+		s.urls().Invalidate(mediaKey)
+		url, err = s.urls().Get(ctx, mediaKey)
 		if err != nil {
 			http.Error(w, "re-resolve: "+err.Error(), http.StatusBadGateway)
 			return
@@ -305,7 +305,7 @@ func (s *Server) doProxyGet(ctx context.Context, url, mediaKey string, _ bool) (
 	if err != nil {
 		return nil, false, err
 	}
-	resp, err := s.gp.HTTPClient().Do(req)
+	resp, err := s.gpc().HTTPClient().Do(req)
 	return resp, false, err
 }
 

@@ -18,7 +18,8 @@ func (s *Server) handleDeleteAll(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/settings/gateways", http.StatusSeeOther)
 		return
 	}
-	if s.lib == nil {
+	lib := s.libc()
+	if lib == nil {
 		http.Error(w, "library unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -26,7 +27,7 @@ func (s *Server) handleDeleteAll(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := withTimeout(r.Context(), 30*time.Minute)
 	defer cancel()
 
-	items, err := s.lib.All(ctx)
+	items, err := lib.All(ctx)
 	if err != nil {
 		s.render(w, "error", pageData{
 			User:    userFromCtx(r.Context()),
@@ -51,7 +52,7 @@ func (s *Server) handleDeleteAll(w http.ResponseWriter, r *http.Request) {
 		if end > len(keys) {
 			end = len(keys)
 		}
-		res, derr := s.gp.DeleteByMediaKeys(ctx, keys[i:end], false) // false = trash, not permanent
+		res, derr := s.gpc().DeleteByMediaKeys(ctx, keys[i:end], false) // false = trash, not permanent
 		if derr != nil {
 			failed += end - i
 			continue
@@ -62,7 +63,7 @@ func (s *Server) handleDeleteAll(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	s.lib.Invalidate()
+	lib.Invalidate()
 	s.log.Warn("delete-all executed", "user", userFromCtx(r.Context()), "total", len(keys), "failed", failed)
 	http.Redirect(w, r, "/browse", http.StatusSeeOther)
 }

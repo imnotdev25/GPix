@@ -16,7 +16,7 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := withTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	page, err := s.gp.ListPage(ctx, cursor)
+	page, err := s.gpc().ListPage(ctx, cursor)
 	if err != nil {
 		s.log.Error("list page", "err", err)
 		s.render(w, "error", pageData{
@@ -92,7 +92,7 @@ func (s *Server) handleView(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := withTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	page, err := s.gp.ListPage(ctx, "")
+	page, err := s.gpc().ListPage(ctx, "")
 	if err == nil {
 		for _, it := range page.Items {
 			if it.MediaKey == key {
@@ -121,7 +121,7 @@ func (s *Server) handleView(w http.ResponseWriter, r *http.Request) {
 	// encrypted videos are played directly from the decrypting /raw endpoint.
 	var qualities []qualityChoice
 	if class == classVideo && !encrypted {
-		if manifest, mErr := s.gp.GetStreamManifest(ctx, key, "hls"); mErr == nil {
+		if manifest, mErr := s.gpc().GetStreamManifest(ctx, key, "hls"); mErr == nil {
 			variants := ParseMasterPlaylist(manifest)
 			for _, v := range variants {
 				q := qualityChoice{

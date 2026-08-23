@@ -1,6 +1,9 @@
 package gpmc
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+)
 
 type Quality int
 
@@ -11,12 +14,15 @@ const (
 )
 
 type UploadOpts struct {
-	Quality     Quality
-	Force       bool
-	Concurrency int
-	Recursive   bool
-	DeleteAfter bool
+	Quality      Quality
+	Force        bool
+	Concurrency  int
+	Recursive    bool
+	DeleteAfter  bool
 	OverrideName string
+	// Mtime, when non-zero, sets the item's timestamp (e.g. the photo's capture
+	// date from EXIF) instead of the source file's modification time.
+	Mtime time.Time
 }
 
 type Option func(*Client)

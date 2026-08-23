@@ -83,6 +83,9 @@ func (c *Client) uploadOne(ctx context.Context, path string, opts UploadOpts, pr
 	}
 	size := st.Size()
 	mtime := st.ModTime()
+	if !opts.Mtime.IsZero() {
+		mtime = opts.Mtime // caller-provided capture date (e.g. EXIF)
+	}
 	name := filepath.Base(path)
 	if opts.OverrideName != "" {
 		name = opts.OverrideName

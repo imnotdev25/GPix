@@ -1,0 +1,192 @@
+import { useEffect, useState } from "react";
+import * as api from "../api";
+import type { Gateways } from "../types";
+
+export default function Connections() {
+  const [g, setG] = useState<Gateways | null>(null);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+
+  const load = () =>
+    api
+      .get<Gateways>("/api/v1/gateways")
+      .then(setG)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const act = async (path: string, body: unknown, ok: string) => {
+    setError("");
+    try {
+      const res = await api.post<Gateways>(path, body);
+      if (res && typeof res === "object" && "S3Endpoint" in res) setG(res);
+      else load();
+      setNotice(ok);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const toggleEncryption = async () => {
+    if (!g) return;
+    await act("/api/v1/encryption/toggle", { enable: !g.EncryptionEnabled }, "Encryption updated.");
+    load();
+  };
+
+  const deleteAll = async () => {
+    if (!confirm("Delete ALL photos and videos from gpix? Everything moves to the Google Photos trash.")) return;
+    if (!confirm("Are you absolutely sure? This affects your ENTIRE library — there is no undo here.")) return;
+    if (!confirm("Last chance — think once again. Delete everything now?")) return;
+    if (prompt('Type DELETE (in capitals) to confirm.') !== "DELETE") return;
+    try {
+      const res = await api.post<{ total: number; failed: number }>("/api/v1/delete-all", {
+        confirm: "DELETE",
+      });
+      alert(`Moved ${res.total - res.failed} item(s) to trash${res.failed ? `, ${res.failed} failed` : ""}.`);
+    } catch (err) {
+      alert("Delete failed: " + (err instanceof Error ? err.message : err));
+    }
+  };
+
+  if (!g) {
+    return (
+      <div className="center">
+        <div className="spinner" />
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="page-head">
+        <span className="eyebrow">Settings</span>
+        <h1>Connections</h1>
+        <p className="sub">
+          Expose your library over S3-compatible and WebDAV endpoints, and control media
+          encryption.
+        </p>
+      </div>
+
+      {notice && <div className="banner banner-ok">{notice}</div>}
+      {error && <div className="banner banner-err">{error}</div>}
+
+      {g.EncryptionAvailable && (
+        <div className="card">
+          <div className="row">
+            <h2 style={{ margin: 0 }}>Media encryption</h2>
+            <div className="spacer" />
+            <span className={g.EncryptionEnabled ? "badge" : "muted"}>
+              {g.EncryptionEnabled ? "● encrypting new uploads" : "○ off"}
+            </span>
+          </div>
+          <p className="muted">
+            When on, each upload is encrypted with a key only you hold, then disguised as a video.
+            Google only ever stores an opaque clip.
+          </p>
+          <p className="muted">
+            Key fingerprint: <code>{g.EncryptionFingerprint}</code> · {g.EncryptionKeyCount} key
+            {g.EncryptionKeyCount === 1 ? "" : "s"} loaded
+          </p>
+          <div className="row">
+            <button className="btn btn-primary" onClick={toggleEncryption}>
+              {g.EncryptionEnabled ? "Turn encryption off" : "Turn encryption on"}
+            </button>
+            <a className="btn" href="/settings/gateways/encryption-key">
+              Download key backup
+            </a>
+            <a className="btn" href="/settings/gateways">
+              Manage decryption keys
+            </a>
+          </div>
+        </div>
+      )}
+
+      <div className="card">
+        <div className="row">
+          <h2 style={{ margin: 0 }}>S3</h2>
+          <div className="spacer" />
+          <span className="muted">{g.S3Enabled ? g.S3Endpoint : "disabled"}</span>
+        </div>
+        {g.HasS3Keys ? (
+          <>
+            <label className="field">
+              <span>Access key</span>
+              <input className="input" readOnly value={g.S3AccessKey} />
+            </label>
+            <label className="field">
+              <span>Secret key</span>
+              <input className="input" readOnly value={g.S3SecretKey} />
+            </label>
+          </>
+        ) : (
+          <p className="muted">No keys yet — generate a pair to connect an S3 client.</p>
+        )}
+        <div className="row">
+          <button
+            className="btn btn-primary"
+            onClick={() => act("/api/v1/gateways/regenerate", { kind: "s3" }, "New S3 keys generated — copy them now.")}
+          >
+            {g.HasS3Keys ? "Regenerate" : "Generate"} keys
+          </button>
+          {g.HasS3Keys && (
+            <button
+              className="btn"
+              onClick={() => act("/api/v1/gateways/clear", { kind: "s3" }, "S3 keys cleared.")}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="row">
+          <h2 style={{ margin: 0 }}>WebDAV</h2>
+          <div className="spacer" />
+          <span className="muted">{g.WebDAVEnabled ? g.WebDAVEndpoint : "disabled"}</span>
+        </div>
+        <label className="field">
+          <span>Username</span>
+          <input className="input" readOnly value={g.WebDAVUsername} />
+        </label>
+        {g.HasWebDAVPass && (
+          <label className="field">
+            <span>App password</span>
+            <input className="input" readOnly value={g.WebDAVPassword} />
+          </label>
+        )}
+        <div className="row">
+          <button
+            className="btn btn-primary"
+            onClick={() =>
+              act("/api/v1/gateways/regenerate", { kind: "webdav" }, "New WebDAV password — copy it now.")
+            }
+          >
+            {g.HasWebDAVPass ? "Regenerate" : "Generate"} app password
+          </button>
+          {g.HasWebDAVPass && (
+            <button
+              className="btn"
+              onClick={() => act("/api/v1/gateways/clear", { kind: "webdav" }, "WebDAV password cleared.")}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="card" style={{ borderColor: "var(--danger)" }}>
+        <h2 style={{ color: "var(--danger)" }}>Danger zone</h2>
+        <p className="muted">
+          Move <strong>every</strong> item in your library to the Google Photos trash. Recoverable
+          there for 60 days — but there is no undo from here.
+        </p>
+        <button className="btn btn-danger" onClick={deleteAll}>
+          Delete all photos…
+        </button>
+      </div>
+    </>
+  );
+}

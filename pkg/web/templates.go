@@ -40,7 +40,7 @@ func (s *Server) loadTemplates() error {
 			return string(out)
 		},
 	}
-	pages := []string{"login", "browse", "view", "upload", "error", "gateways", "shares", "share_public", "import", "apitokens"}
+	pages := []string{"login", "browse", "view", "upload", "error", "gateways", "shares", "share_public", "import", "apitokens", "accounts"}
 	s.pageTmpls = make(map[string]*template.Template, len(pages))
 	layout, err := tmplFS.ReadFile("templates/layout.html")
 	if err != nil {
@@ -96,6 +96,17 @@ type pageData struct {
 
 	APITokens []apitoken.Token
 	NewToken  string // one-time plaintext shown right after creation
+
+	Accounts []accountView
+	Notice   string
+}
+
+// accountView is a linked Google account shown on the Accounts page.
+type accountView struct {
+	ID      int64
+	Label   string
+	Active  bool
+	AddedAt time.Time
 }
 
 type shareItem struct {

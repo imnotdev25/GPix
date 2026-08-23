@@ -118,13 +118,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
         ],
       );
     }
+    // 4–6 columns so fewer, larger thumbnails load at once (faster on desktop,
+    // where tiny tiles otherwise meant ~10 columns and dozens of concurrent loads).
+    final cols = (MediaQuery.of(context).size.width / 240).floor().clamp(4, 6);
     return GridView.builder(
       controller: _scroll,
-      padding: const EdgeInsets.all(4),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 140,
-        crossAxisSpacing: 4,
-        mainAxisSpacing: 4,
+      padding: const EdgeInsets.all(6),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: cols,
+        crossAxisSpacing: 6,
+        mainAxisSpacing: 6,
       ),
       itemCount: _items.length + (_hasMore ? 1 : 0),
       itemBuilder: (context, i) {

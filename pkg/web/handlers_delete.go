@@ -16,7 +16,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := withTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	results, err := s.gp.DeleteByMediaKeys(ctx, []string{key}, permanent)
+	results, err := s.gpc().DeleteByMediaKeys(ctx, []string{key}, permanent)
 	if err != nil {
 		s.log.Error("delete", "key", key, "err", err)
 		http.Error(w, "delete failed: "+err.Error(), http.StatusBadGateway)
