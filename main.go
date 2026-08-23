@@ -15,9 +15,11 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
+	"gpix/pkg/accounts"
 	"gpix/pkg/apitoken"
 	"gpix/pkg/bridge"
 	"gpix/pkg/cachedb"
@@ -236,26 +238,69 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 		return err
 	}
 
-	gp, err := gpmc.New(auth, gpmc.WithDeviceProfile(profile))
+	// Linked Google accounts. GP_AUTH_DATA seeds the first ("Primary") account on
+	// first run; more can be linked from the web UI, and the active one backs the
+	// whole app.
+	stateDir := filepath.Dir(secretPath)
+	acctStore, err := accounts.Open(filepath.Join(stateDir, "accounts.db"))
 	if err != nil {
-		return fmt.Errorf("gpmc.New: %w", err)
+		return fmt.Errorf("accounts db: %w", err)
+	}
+	defer acctStore.Close()
+	if n, cerr := acctStore.Count(ctx); cerr == nil && n == 0 {
+		if auth == "" {
+			return fmt.Errorf("no accounts linked and GP_AUTH_DATA is empty — see the Auth section of the README")
+		}
+		if _, aerr := acctStore.Add(ctx, "Primary", auth); aerr != nil {
+			return fmt.Errorf("seed account: %w", aerr)
+		}
+		log.Info("linked the GP_AUTH_DATA account as 'Primary'")
 	}
 
-	// Shared, background-refreshed listing cache, backed by a SQLite snapshot so
-	// S3 ListObjects / WebDAV PROPFIND return filenames instantly on startup
-	// (stale-while-revalidate) instead of re-walking the whole Google Photos
-	// library each request.
-	cacheStore, err := cachedb.Open(filepath.Join(filepath.Dir(secretPath), "cache.db"))
-	if err != nil {
-		return fmt.Errorf("cache db: %w", err)
+	// Each account gets its own Google client, listing cache (with a SQLite
+	// snapshot so listings are instant on startup) and object-store backend.
+	// Built lazily on first activation and reused, so switching back is instant.
+	var cacheStores []*cachedb.Store
+	defer func() {
+		for _, cs := range cacheStores {
+			cs.Close()
+		}
+	}()
+	buildAccount := func(bctx context.Context, id int64, label, authData string) (*accounts.Runtime, error) {
+		agp, gerr := gpmc.New(authData, gpmc.WithDeviceProfile(profile))
+		if gerr != nil {
+			return nil, fmt.Errorf("gpmc.New: %w", gerr)
+		}
+		cs, cerr := cachedb.Open(filepath.Join(stateDir, fmt.Sprintf("cache_%d.db", id)))
+		if cerr != nil {
+			return nil, fmt.Errorf("cache db: %w", cerr)
+		}
+		cacheStores = append(cacheStores, cs)
+		alib := library.New(agp, 0, cs)
+		alib.Start(ctx, 0)
+		// Bounded warm-up so the first S3/WebDAV listing serves from memory instead
+		// of blocking a client on a cold full walk of Google. Instant when a
+		// snapshot exists; a huge first-run library keeps warming in the background.
+		if alib.WarmUp(bctx, 20*time.Second) {
+			log.Info("library cache warm", "account", label)
+		} else {
+			log.Info("library cache warming in background; S3/WebDAV listings will speed up once it finishes", "account", label)
+		}
+		return &accounts.Runtime{
+			ID:    id,
+			Label: label,
+			GP:    agp,
+			Lib:   alib,
+			BE:    gpmcstore.New(agp, gpmcstore.Options{TempDir: cfg.TempDir, Crypt: crypt, Library: alib}),
+		}, nil
 	}
-	defer cacheStore.Close()
-	lib := library.New(gp, 0, cacheStore)
-	lib.Start(ctx, 0)
-
-	// Shared Google-Photos-backed object store (encryption + library cache),
-	// used by the gateways, the Immich importer, and the web UI.
-	be := gpmcstore.New(gp, gpmcstore.Options{TempDir: cfg.TempDir, Crypt: crypt, Library: lib})
+	acctMgr, err := accounts.NewManager(ctx, acctStore, buildAccount)
+	if err != nil {
+		return fmt.Errorf("accounts: %w", err)
+	}
+	// Object store that always follows the active account, so the gateways and
+	// the importer switch along with it.
+	be := accounts.NewDynamicBackend(acctMgr)
 
 	// Immich → gpix importer (background job; remembers imported asset IDs in
 	// import.db so re-runs are idempotent).
@@ -307,7 +352,7 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 		log.Info("logto login enabled", "redirect", redirect, "max_users", cfg.MaxUsers, "allowlist", len(cfg.SignupAllowlist))
 	}
 
-	srv, err := web.New(cfg, gp, lib, gw, crypt, shareStore, oc, us, importer, apiTokens, log)
+	srv, err := web.New(cfg, acctMgr, gw, crypt, shareStore, oc, us, importer, apiTokens, log)
 	if err != nil {
 		return fmt.Errorf("web.New: %w", err)
 	}
