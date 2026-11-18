@@ -42,3 +42,13 @@ func WithLanguage(lang string) Option {
 func WithProxy(proxy string) Option {
 	return func(c *Client) { c.proxy = proxy }
 }
+
+// UploadHook is called after gpix commits a new item to the library. It is not
+// called when an upload is skipped because an identical item already exists,
+// since that item may have been uploaded by another app.
+type UploadHook func(mediaKey, filename string)
+
+// WithUploadHook registers a callback that runs after every committed upload.
+func WithUploadHook(h UploadHook) Option {
+	return func(c *Client) { c.onUpload = h }
+}

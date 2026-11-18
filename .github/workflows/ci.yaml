@@ -8,7 +8,7 @@ name: ci
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, v3, v2, v1]
   pull_request:
   workflow_dispatch:
 
@@ -54,6 +54,13 @@ jobs:
         working-directory: app
         run: |
           flutter create --platforms=linux --org com.gpix --project-name gpix_app .
+          # flutter create adds a template counter test, but the app has no
+          # flutter_test dependency, so analyzing it fails. Drop the template only.
+          if grep -qs 'Counter increments smoke test' test/widget_test.dart; then
+            rm test/widget_test.dart
+          fi
+          bash tool/setup_linux.sh
           flutter pub get
-          flutter analyze
+          # Fail on errors and warnings; lint "info" hints are reported only.
+          flutter analyze --no-fatal-infos
           flutter build linux --debug

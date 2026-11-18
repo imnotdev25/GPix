@@ -66,7 +66,6 @@ export default function Accounts() {
   return (
     <>
       <div className="page-head">
-        <span className="eyebrow">Settings</span>
         <h1>Accounts</h1>
         <p className="sub">
           Link several Google Photos accounts and switch between them. The active account backs the

@@ -82,3 +82,20 @@ export interface Gateways {
   JustGenerated: string;
   Notice: string;
 }
+
+/** What "Delete gpix uploads" would remove (GET /api/v1/gpix-uploads/summary). */
+export interface GpixUploadSummary {
+  accountId: number;
+  accountLabel: string;
+  total: number;
+  photos: number;
+  videos: number;
+  docs: number;
+  files: number;
+  bytes: number;
+  tracked: number;
+  disguised: number;
+  trackingEnabled: boolean;
+  trackingSince: string;
+  sample: string[];
+}

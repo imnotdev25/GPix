@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import * as api from "../api";
 import type { Me } from "../types";
 
@@ -26,9 +27,7 @@ export default function Login({ me, onSignedIn }: { me: Me; onSignedIn: () => vo
     <div className="login-wrap">
       <div className="card login-card">
         <div style={{ textAlign: "center", marginBottom: 18 }}>
-          <span className="brand-mark" style={{ margin: "0 auto 10px" }}>
-            g
-          </span>
+          <img className="login-logo" src="/gpix.svg" alt="" />
           <h1 style={{ fontSize: 22, margin: 0 }}>gpix</h1>
           <p className="sub">Sign in to your library</p>
         </div>
@@ -76,6 +75,10 @@ export default function Login({ me, onSignedIn }: { me: Me; onSignedIn: () => vo
         {!me.passwordLogin && !me.logtoEnabled && (
           <p className="muted">No sign-in method is enabled on this server.</p>
         )}
+
+        <p className="login-foot">
+          <Link to="/">What is gpix?</Link>
+        </p>
       </div>
     </div>
   );

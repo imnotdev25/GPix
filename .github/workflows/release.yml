@@ -6,8 +6,10 @@ name: release
 #
 #   Server (Go):  linux/macos/windows, amd64 + arm64 — cross-compiled from one
 #                 Linux runner (the server is pure-Go / CGO-free).
-#   App (Flutter): Android APK, Linux desktop bundle, macOS app.
+#   App (Flutter): Android APK, plus the Linux, macOS and Windows desktop
+#                 packages built by desktop.yml.
 #   iOS is not built here — the App Store / device install needs code signing.
+#   The Docker image for the same tag is published by docker.yml.
 
 on:
   push:
@@ -71,6 +73,7 @@ jobs:
         run: |
           flutter create --platforms=android --org com.gpix --project-name gpix_app .
           flutter pub get
+          bash tool/apply_icons.sh
           flutter build apk --release
       - name: Stage
         working-directory: app
@@ -83,75 +86,17 @@ jobs:
           name: app-android
           path: app/out/*
 
-  # ------------------------------------------------------------- Linux desktop
-  app-linux:
-    name: App · Linux
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-      - name: Build Linux bundle
-        working-directory: app
-        run: |
-          flutter create --platforms=linux --org com.gpix --project-name gpix_app .
-          flutter pub get
-          flutter build linux --release
-      - name: Package
-        working-directory: app
-        run: |
-          mkdir -p out
-          ( cd build/linux/*/release/bundle && tar -czf - . ) \
-            > "out/gpix_${GITHUB_REF_NAME:-dev}_linux-x64.tar.gz"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: app-linux
-          path: app/out/*
-
-  # --------------------------------------------------------------- macOS app
-  app-macos:
-    name: App · macOS
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-      - name: Build macOS app
-        working-directory: app
-        run: |
-          flutter create --platforms=macos --org com.gpix --project-name gpix_app .
-          # The macOS app is sandboxed; grant outbound network access so it can
-          # reach your gpix server.
-          for f in macos/Runner/DebugProfile.entitlements macos/Runner/Release.entitlements; do
-            /usr/libexec/PlistBuddy -c "Add :com.apple.security.network.client bool true" "$f" 2>/dev/null \
-              || /usr/libexec/PlistBuddy -c "Set :com.apple.security.network.client true" "$f"
-          done
-          flutter pub get
-          flutter build macos --release
-      - name: Package
-        working-directory: app
-        run: |
-          mkdir -p out
-          APP="$(ls -d build/macos/Build/Products/Release/*.app | head -n1)"
-          ( cd "$(dirname "$APP")" && zip -qry - "$(basename "$APP")" ) \
-            > "out/gpix_${GITHUB_REF_NAME:-dev}_macos.zip"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: app-macos
-          path: app/out/*
+  # ------------------------------------- desktop apps (Linux, macOS, Windows)
+  desktop:
+    name: App · Desktop
+    uses: ./.github/workflows/desktop.yml
+    with:
+      version: ${{ github.ref_name }}
 
   # ------------------------------------------------------- publish the release
   publish:
     name: Publish release
-    needs: [server, app-android, app-linux, app-macos]
+    needs: [server, app-android, desktop]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -172,9 +117,14 @@ jobs:
 
             **Server (Go)** — `gpix_<ver>_<os>_<arch>.tar.gz` / `.zip` for Linux, macOS, and Windows (amd64 + arm64). Verify downloads against `checksums-server.txt`.
 
+            **Docker** — `docker pull ghcr.io/${{ github.repository_owner }}/gpix:latest` (linux/amd64 + linux/arm64; the version tag drops the leading `v`).
+
             **App (Flutter)**
             - `..._android.apk` — sideload on Android (enable "install unknown apps").
-            - `..._linux-x64.tar.gz` — extract and run the bundled binary (needs GTK 3).
-            - `..._macos.zip` — unsigned; first launch: right-click → **Open**, or `xattr -dr com.apple.quarantine gpix_app.app`.
+            - `..._windows-x64-setup.exe` — installer (Start-menu shortcut, per-user by default). `..._windows-x64.zip` is the portable build. Unsigned, so SmartScreen may warn: **More info → Run anyway**.
+            - `..._amd64.deb` — `sudo apt install ./gpix_..._amd64.deb`, then launch "gpix" from the app menu (or run `gpix-app`).
+            - `..._linux-x64.AppImage` — `chmod +x` and run (needs GTK 3 on the host).
+            - `..._linux-x64.tar.gz` — extract and run `./install.sh` for a per-user install with menu entry and icon.
+            - `..._macos.dmg` — open and drag gpix_app to Applications. `..._macos.zip` is the same app zipped. Unsigned; first launch: right-click → **Open**, or `xattr -dr com.apple.quarantine /Applications/gpix_app.app`.
 
             iOS isn't included (requires code signing). Build it locally per `app/README.md`.

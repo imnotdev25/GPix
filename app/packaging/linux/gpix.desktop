@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=gpix
+GenericName=Photo library
+Comment=Browse and back up your self-hosted gpix library
+Exec=@EXEC@
+Icon=gpix
+Terminal=false
+Categories=Graphics;Photography;
+Keywords=photos;backup;gallery;
+StartupWMClass=gpix_app

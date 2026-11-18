@@ -13,7 +13,7 @@ gpix is a self-hosted Google Photos client written in Go. One binary, several wa
 - **Import from Immich** — point gpix at an existing Immich server (URL + API key) and copy your whole library in from the web UI, with live progress and resumable, dedup'd runs.
 - **Cross-platform app + JSON API** — a `/api/v1` JSON API (Bearer-token auth) powers a **Flutter app** for Android, iOS, Linux, and macOS: browse, full-screen view, upload/back up, share, and drive Immich imports from your phone or desktop. Material 3 UI, one codebase. See [`app/`](app).
 - **CLI** — upload files or whole folders from the terminal.
-- **Telegram bot** — `/upload`, `/get`, `/list`, `/info` against your library from any chat (optional).
+- **Telegram bot** — `/upload`, `/get`, `/list`, `/info` against your library from any chat (optional, off by default; enable with `TG_BOT_ENABLED=true`).
 - **Universal file storage** — PDFs, archives, executables, any file gets transparently wrapped as a 1-second MP4 with the original bytes preserved. Uploaded as a "video", recovered byte-identical on download. Text/markdown documents additionally render to a readable **image** in the UI while staying downloadable as the original. Effectively unlimited cloud storage for arbitrary files.
 
 gpix talks the mobile Google Photos protocol directly, which means **uploads count as original quality without consuming your storage quota** (Pixel device profile). Everything else — dedup, video streaming, thumbnails — is wired into the same fast path.
@@ -53,14 +53,14 @@ On first run gpix wants:
 
 1. A Google Photos `auth_data` string in `.env` (see [Auth](#auth-getting-gp_auth_data) below).
 2. A web config + bcrypt password hash if you want the web UI (see [Web UI](#web-ui)).
-3. Telegram bot credentials in `.env` if you want the bot (see [Telegram bot](#telegram-bot)).
+3. Telegram bot credentials plus `TG_BOT_ENABLED=true` in `.env` if you want the bot (see [Telegram bot](#telegram-bot)).
 
 Then:
 
 ```bash
-go run .                        # bot + web together
+go run .                        # web UI (+ bot when TG_BOT_ENABLED=true)
 go run . -mode web              # web UI only
-go run . -mode bot              # bot only
+go run . -mode bot              # bot only (needs TG_BOT_ENABLED=true)
 go run . -cli ./photos          # CLI uploader
 go run . -hashpw                # generate a bcrypt password hash
 ```
@@ -122,7 +122,7 @@ go run . -hashpw
 **Option A — `.env` (everything in one place):**
 
 ```bash
-cp .env.example .env
+cp .env.sample .env
 # Set GP_AUTH_DATA, GPIX_USERNAME, GPIX_PASSWORD_HASH (and any gateways you want)
 ```
 
@@ -131,7 +131,7 @@ GP_AUTH_DATA=androidId=...&Token=aas_et/...
 GPIX_USERNAME=you
 GPIX_PASSWORD_HASH=$2a$12$replace_me
 GPIX_LISTEN=0.0.0.0:8080
-# optional: GPIX_S3_LISTEN, GPIX_WEBDAV_LISTEN, GPIX_IMMICH_LISTEN, SERVER_URL, ...
+# optional: GPIX_S3_LISTEN, GPIX_WEBDAV_LISTEN, SERVER_URL, ... (.env.sample lists every variable)
 ```
 
 **Option B — `gpix-web.conf`:**
@@ -150,7 +150,7 @@ session_days = 30
 stream_token_ttl_minutes = 60
 ```
 
-Runtime state files (`secret.key`, `gateways.json`, `encryption.key`, `shares.db`) are always created on disk — set `GPIX_DATA_DIR` to choose where (defaults to the working directory). The **Telegram bot is optional**: leave `TG_BOT_TOKEN` empty and `gpix` (or `-mode all`) just runs the web + gateways.
+Runtime state files (`secret.key`, `gateways.json`, `encryption.key`, `shares.db`, `uploads.db`) are always created on disk — set `GPIX_DATA_DIR` to choose where (defaults to the working directory). The **Telegram bot is off by default**: `gpix` (or `-mode all`) runs just the web UI and gateways unless `TG_BOT_ENABLED=true`.
 
 On first run gpix generates a 32-byte `secret.key` next to the config (used to sign session cookies and media-share tokens). Keep it safe; rotating it logs everyone out.
 
@@ -288,9 +288,10 @@ If you want to push files to Google Photos from a Telegram chat (or pull files o
 1. Open [@BotFather](https://t.me/BotFather), run `/newbot`, save the token.
 2. Visit [my.telegram.org/apps](https://my.telegram.org/apps), create an app, save `api_id` and `api_hash`.
 
-Add to `.env`:
+Add to `.env` (the bot is off until `TG_BOT_ENABLED=true`, and only runs with `-mode all` or `-mode bot`):
 
 ```env
+TG_BOT_ENABLED=true
 TG_BOT_TOKEN=123456789:ABC...
 TG_API_ID=12345678
 TG_API_HASH=abcd...
@@ -475,7 +476,14 @@ Fully static (the SQLite and image deps are pure-Go), ~25 MB stripped. Drop the 
 
 ## Docker
 
-A multi-stage `Dockerfile` builds a static binary into a minimal Alpine image (web assets are embedded, so only CA certs are added). All runtime config and state — `gpix-web.conf`/`.env`, plus the generated `secret.key`, `gateways.json`, `encryption.key`, `shares.db`, `cache.db`, `users.db`, and `gpix-thumbcache/` — live in `/data`, which you mount.
+Prebuilt multi-arch images (`linux/amd64`, `linux/arm64`) are published to GitHub Container Registry by `.github/workflows/docker.yml`: `:latest` and `:<version>` for each `v*` release tag, and `:edge` for the latest `master`.
+
+```bash
+docker run --rm -p 8080:8080 -p 9000:9000 -p 8081:8081 \
+  -v "$PWD/data:/data" ghcr.io/imnotdev25/gpix:latest
+```
+
+To build it yourself: a multi-stage `Dockerfile` builds the React UI and a static binary into a minimal Alpine image (web assets are embedded, so only CA certs are added). All runtime config and state — `gpix-web.conf`/`.env`, plus the generated `secret.key`, `gateways.json`, `encryption.key`, `shares.db`, `cache.db`, `users.db`, and `gpix-thumbcache/` — live in `/data`, which you mount.
 
 ```bash
 # Put your config and auth in ./data first:
@@ -489,7 +497,7 @@ docker run --rm -p 8080:8080 -p 9000:9000 -p 8081:8081 \
   -v "$PWD/data:/data" gpix
 ```
 
-Or with Compose (`docker compose up -d` — see `docker-compose.yml`). The image listens on `8080` (web), `9000` (S3), and `8081` (WebDAV); with `0.0.0.0` listen addresses in the config, publishing the ports exposes them on your host. It runs as a non-root user, so make sure the mounted `./data` directory is writable by UID `10001` (or add `--user "$(id -u):$(id -g)"`). Default `CMD` runs web only; use `-mode all` to add the Telegram bot.
+Or with Compose (`docker compose up -d` — see `docker-compose.yml`). The image listens on `8080` (web), `9000` (S3), and `8081` (WebDAV); with `0.0.0.0` listen addresses in the config, publishing the ports exposes them on your host. It runs as a non-root user, so make sure the mounted `./data` directory is writable by UID `10001` (or add `--user "$(id -u):$(id -g)"`). Default `CMD` runs web only; to add the Telegram bot, set `TG_BOT_ENABLED=true` and use `-mode all`.
 
 ---
 

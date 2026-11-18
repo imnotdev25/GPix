@@ -25,19 +25,24 @@ This folder ships the Dart source + `pubspec.yaml` only. Generate the platform p
 ```bash
 cd app
 
-# Generate android/ ios/ linux/ macos/ scaffolding around the existing lib/.
-flutter create --platforms=android,ios,linux,macos --org com.gpix --project-name gpix_app .
+# Generate the platform scaffolding around the existing lib/ (pick the ones you need).
+flutter create --platforms=android,ios,linux,macos,windows --org com.gpix --project-name gpix_app .
 
 flutter pub get
 
-# Apply the gpix app icon to every platform (from assets/icon/gpix.png):
-dart run flutter_launcher_icons
+# Apply the gpix icon (assets/icon/gpix.png) to every platform folder present.
+bash tool/apply_icons.sh
+# Desktop runner tweaks (window title "gpix", Linux window icon):
+bash tool/setup_linux.sh      # if you generated linux/
+bash tool/setup_windows.sh    # if you generated windows/
+bash tool/setup_macos.sh      # if you generated macos/ (sandbox entitlements)
 
 # Run on a connected device / desktop:
 flutter run                 # pick a device when prompted
 # or target one explicitly:
 flutter run -d linux
 flutter run -d macos
+flutter run -d windows
 flutter run -d <android-device-id>
 ```
 
@@ -48,7 +53,33 @@ flutter build apk           # Android
 flutter build ipa           # iOS (needs Xcode signing)
 flutter build linux         # Linux desktop
 flutter build macos         # macOS desktop
+flutter build windows       # Windows desktop (on a Windows machine)
 ```
+
+### Linux packages
+
+After `flutter build linux --release`, one script produces all three formats in `out/`:
+
+```bash
+bash tool/package_linux.sh v0.1.0
+#   gpix_v0.1.0_linux-x64.tar.gz   extract, then ./install.sh (per-user, adds menu entry + icon)
+#   gpix_v0.1.0_amd64.deb          sudo apt install ./gpix_v0.1.0_amd64.deb  → command: gpix-app
+#   gpix_v0.1.0_linux-x64.AppImage chmod +x and run (needs GTK 3 on the host)
+```
+
+Set `FORMATS="tar deb"` to skip some. The `.deb` needs `dpkg-deb`; sized hicolor icons need ImageMagick; the AppImage step downloads `appimagetool` unless `APPIMAGETOOL` points at one.
+
+### Windows installer
+
+On Windows, after `flutter build windows --release`, with [Inno Setup 6.3+](https://jrsoftware.org/isinfo.php) installed (`choco install innosetup`):
+
+```powershell
+pwsh tool/package_windows.ps1 -Version v0.1.0
+#   out/gpix_v0.1.0_windows-x64-setup.exe   installer: Start-menu shortcut, optional desktop icon
+#   out/gpix_v0.1.0_windows-x64.zip         portable build
+```
+
+The script copies the MSVC runtime DLLs into the bundle so the app starts without the Visual C++ Redistributable. Both outputs are unsigned, so SmartScreen may warn on first run (**More info → Run anyway**).
 
 ### macOS `.dmg`
 
@@ -59,7 +90,9 @@ cd app
 bash tool/build_macos_dmg.sh
 ```
 
-What it does: ensures the `macos/` platform exists → adds the `com.apple.security.network.client` entitlement to **Release.entitlements** (so the packaged app can reach your server) → `flutter build macos --release` → stages the `.app` + an `Applications` symlink → `hdiutil create` a compressed DMG.
+What it does: ensures the `macos/` platform exists → adds the network and file-dialog sandbox entitlements (`tool/setup_macos.sh`) → applies the gpix icon (`tool/apply_icons.sh`) → `flutter build macos --release` → stages the `.app` + an `Applications` symlink, gives the disk image the gpix volume icon, and writes a compressed DMG.
+
+If Finder still shows the old Flutter icon after rebuilding, it's the icon cache: drag the old app to the Trash first, or run `killall Finder Dock`.
 
 The result is **unsigned**, so Gatekeeper warns on first launch. Recipients can right-click the app → **Open**, or clear the quarantine flag:
 
@@ -69,13 +102,7 @@ xattr -dr com.apple.quarantine /Applications/gpix_app.app
 
 To distribute without warnings you need an **Apple Developer ID** certificate and **notarization** (`codesign --deep --options runtime …` then `xcrun notarytool submit … && xcrun stapler staple`). That requires a paid Apple Developer account and signing secrets — out of scope for the local build here. For a prettier DMG (custom background, icon layout) you can also `brew install create-dmg` and point it at `build/macos/Build/Products/Release/gpix_app.app`.
 
-> **Icon generation note:** `dart run flutter_launcher_icons` writes icons for every platform listed under `flutter_launcher_icons:` in `pubspec.yaml`. If you only generated some platforms (e.g. `flutter create --platforms=macos`), it fails with `PathNotFoundException: ... AppIcon.appiconset/Icon-App-20x20@1x.png` because the iOS/Android icon folders don't exist. Fix: create every platform first —
->
-> ```bash
-> flutter create --platforms=android,ios,linux,macos --org com.gpix --project-name gpix_app .
-> ```
->
-> — or set the platforms you're not building to `false` under `flutter_launcher_icons:`. The icon step is optional; the app runs with Flutter's default icon without it.
+> **Icon note:** use `bash tool/apply_icons.sh` rather than `dart run flutter_launcher_icons` directly. The plain command reads `pubspec.yaml`, which enables Android and iOS, so it fails with `PathNotFoundException: ... AppIcon.appiconset/Icon-App-20x20@1x.png` when only some platforms were generated. The script enables just the platform folders that exist. Linux isn't covered by flutter_launcher_icons; `tool/setup_linux.sh` and the packaging script handle its icon.
 
 ## Platform notes
 

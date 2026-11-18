@@ -113,7 +113,7 @@ func (s *Server) handleLogtoCallback(w http.ResponseWriter, r *http.Request) {
 		sessUser = ui.Subject
 	}
 	s.setSessionCookie(w, sessUser, time.Duration(s.cfg.SessionDays)*24*time.Hour)
-	http.Redirect(w, r, "/browse", http.StatusSeeOther)
+	http.Redirect(w, r, "/library", http.StatusSeeOther)
 }
 
 func firstNonEmpty(vs ...string) string {

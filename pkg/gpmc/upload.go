@@ -158,6 +158,9 @@ func (c *Client) uploadOne(ctx context.Context, path string, opts UploadOpts, pr
 	}
 
 	res.MediaKey = key
+	if c.onUpload != nil && key != "" {
+		c.onUpload(key, name)
+	}
 	emit(StageDone, size, size, nil)
 	if opts.DeleteAfter {
 		_ = os.Remove(path)

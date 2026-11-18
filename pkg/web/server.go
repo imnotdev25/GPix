@@ -23,6 +23,7 @@ import (
 	"gpix/pkg/mediacrypt"
 	"gpix/pkg/oidc"
 	"gpix/pkg/share"
+	"gpix/pkg/uploads"
 	"gpix/pkg/users"
 )
 
@@ -43,6 +44,7 @@ type Server struct {
 	users          *users.Store
 	importer       *immichimport.Importer
 	apitokens      *apitoken.Store
+	uploads        *uploads.Store // log of items gpix uploaded; may be nil
 	log            *slog.Logger
 	httpSrv        *http.Server
 	progressBus    *progressBus
@@ -59,7 +61,7 @@ type Server struct {
 // credentials store, crypt the media-encryption manager, and sh the share store
 // backing the public /s/ links. Any of them may be nil to disable the related
 // feature.
-func New(cfg Config, accts *accounts.Manager, gw *gwcreds.Store, crypt *mediacrypt.Manager, sh *share.Store, oc *oidc.Client, us *users.Store, imp *immichimport.Importer, at *apitoken.Store, log *slog.Logger) (*Server, error) {
+func New(cfg Config, accts *accounts.Manager, gw *gwcreds.Store, crypt *mediacrypt.Manager, sh *share.Store, oc *oidc.Client, us *users.Store, imp *immichimport.Importer, at *apitoken.Store, up *uploads.Store, log *slog.Logger) (*Server, error) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -84,6 +86,7 @@ func New(cfg Config, accts *accounts.Manager, gw *gwcreds.Store, crypt *mediacry
 		users:          us,
 		importer:       imp,
 		apitokens:      at,
+		uploads:        up,
 		log:            log,
 		progressBus:    newProgressBus(),
 		sessionSignKey: deriveKey(cfg.SecretKey, "session"),

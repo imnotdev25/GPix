@@ -1,16 +1,18 @@
 import { useEffect, useState } from "react";
 import { thumbUrl } from "../api";
 import type { MediaItem } from "../types";
+import Icon from "./Icon";
 
-/** Thumb renders a media thumbnail. For encrypted photos/documents the server
- *  renders the real thumbnail in the background (Google only holds a blank
- *  placeholder), so this re-requests a few times until it resolves. */
+/** Thumb renders a media thumbnail that fades in once decoded. For encrypted
+ *  photos/documents the server renders the real thumbnail in the background
+ *  (Google only holds a blank placeholder), so this re-requests a few times
+ *  until it resolves. */
 export default function Thumb({ item, size = 512 }: { item: MediaItem; size?: number }) {
   const [bust, setBust] = useState(0);
   const [failed, setFailed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
-  const mayBePending =
-    item.encrypted && (item.class === "photo" || item.class === "doc");
+  const mayBePending = item.encrypted && (item.class === "photo" || item.class === "doc");
 
   useEffect(() => {
     if (!mayBePending) return;
@@ -20,23 +22,26 @@ export default function Thumb({ item, size = 512 }: { item: MediaItem; size?: nu
     return () => timers.forEach(clearTimeout);
   }, [mayBePending, item.key]);
 
-  if (failed || item.class === "file" || item.class === "video") {
-    // Videos and plain files have no useful still to show inline.
-    if (item.class === "video" && !failed) {
-      return (
-        <img
-          src={thumbUrl(item, size, bust)}
-          alt={item.name}
-          loading="lazy"
-          onError={() => setFailed(true)}
-        />
-      );
-    }
+  // A retry may succeed where the first request failed.
+  useEffect(() => {
+    if (bust) setFailed(false);
+  }, [bust]);
+
+  if (failed || item.class === "file") {
+    const dot = item.name.lastIndexOf(".");
+    const ext = dot > 0 ? item.name.slice(dot + 1, dot + 6).toUpperCase() : "";
+    const icon =
+      item.class === "video"
+        ? "video"
+        : item.class === "doc"
+          ? "doc"
+          : item.class === "photo"
+            ? "photos"
+            : "file";
     return (
-      <div className="center" style={{ minHeight: 0, height: "100%" }}>
-        <span style={{ fontSize: 26, opacity: 0.6 }}>
-          {item.class === "video" ? "▶" : "📄"}
-        </span>
+      <div className="thumb-fallback">
+        <Icon name={icon} size={30} />
+        {ext && <span>{ext}</span>}
       </div>
     );
   }
@@ -44,8 +49,12 @@ export default function Thumb({ item, size = 512 }: { item: MediaItem; size?: nu
   return (
     <img
       src={thumbUrl(item, size, bust)}
-      alt={item.name}
+      alt=""
       loading="lazy"
+      decoding="async"
+      draggable={false}
+      className={loaded ? "loaded" : undefined}
+      onLoad={() => setLoaded(true)}
       onError={() => setFailed(true)}
     />
   );

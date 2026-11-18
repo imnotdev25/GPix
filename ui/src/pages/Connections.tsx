@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
 import * as api from "../api";
 import type { Gateways } from "../types";
+import PurgeGpixUploads from "../components/PurgeGpixUploads";
+import { errMsg, useConfirm, useToast } from "../components/feedback";
 
 export default function Connections() {
   const [g, setG] = useState<Gateways | null>(null);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const ask = useConfirm();
+  const toast = useToast();
 
   const load = () =>
     api
@@ -36,17 +40,25 @@ export default function Connections() {
   };
 
   const deleteAll = async () => {
-    if (!confirm("Delete ALL photos and videos from gpix? Everything moves to the Google Photos trash.")) return;
-    if (!confirm("Are you absolutely sure? This affects your ENTIRE library — there is no undo here.")) return;
-    if (!confirm("Last chance — think once again. Delete everything now?")) return;
-    if (prompt('Type DELETE (in capitals) to confirm.') !== "DELETE") return;
+    const ok = await ask({
+      title: "Delete your entire library?",
+      message:
+        "Every item in the active account, including photos from your phone and other apps, moves to the Google Photos trash. It stays recoverable there for 60 days.",
+      confirmLabel: "Delete everything",
+      danger: true,
+      typeToConfirm: "DELETE",
+    });
+    if (!ok) return;
     try {
       const res = await api.post<{ total: number; failed: number }>("/api/v1/delete-all", {
         confirm: "DELETE",
       });
-      alert(`Moved ${res.total - res.failed} item(s) to trash${res.failed ? `, ${res.failed} failed` : ""}.`);
+      toast(
+        `Moved ${res.total - res.failed} item(s) to trash${res.failed ? `; ${res.failed} failed` : ""}.`,
+        res.failed ? "err" : "ok",
+      );
     } catch (err) {
-      alert("Delete failed: " + (err instanceof Error ? err.message : err));
+      toast("Delete failed: " + errMsg(err), "err");
     }
   };
 
@@ -61,7 +73,6 @@ export default function Connections() {
   return (
     <>
       <div className="page-head">
-        <span className="eyebrow">Settings</span>
         <h1>Connections</h1>
         <p className="sub">
           Expose your library over S3-compatible and WebDAV endpoints, and control media
@@ -176,6 +187,8 @@ export default function Connections() {
           )}
         </div>
       </div>
+
+      <PurgeGpixUploads />
 
       <div className="card" style={{ borderColor: "var(--danger)" }}>
         <h2 style={{ color: "var(--danger)" }}>Danger zone</h2>

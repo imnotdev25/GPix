@@ -1,8 +1,8 @@
 services:
   gpix:
     build: .
-    # Or use a prebuilt image instead of building:
-    # image: gpix:latest
+    # Or use the published image instead of building (and remove `build:`):
+    # image: ghcr.io/imnotdev25/gpix:latest
     container_name: gpix
     restart: unless-stopped
     ports:
@@ -20,5 +20,5 @@ services:
       - TZ=UTC
       # Either keep GP_AUTH_DATA in ./data/.env, or uncomment and set it here:
       # - GP_AUTH_DATA=androidId=...&Token=aas_et/...
-    # Run web + Telegram bot together instead of web only:
+    # Run web + Telegram bot together (also set TG_BOT_ENABLED=true):
     # command: ["-mode", "all"]

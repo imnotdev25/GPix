@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import * as api from "../api";
 import type { ApiToken } from "../types";
+import { errMsg, useConfirm, useToast } from "../components/feedback";
 
 export default function Tokens() {
   const [tokens, setTokens] = useState<ApiToken[]>([]);
@@ -8,6 +9,8 @@ export default function Tokens() {
   const [secret, setSecret] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const ask = useConfirm();
+  const toast = useToast();
 
   const load = async () => {
     setLoading(true);
@@ -40,19 +43,25 @@ export default function Tokens() {
   };
 
   const revoke = async (t: ApiToken) => {
-    if (!confirm("Revoke this token? Any app using it stops working.")) return;
+    const ok = await ask({
+      title: `Revoke "${t.label}"?`,
+      message: "Any app using this token stops working immediately.",
+      confirmLabel: "Revoke token",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.del(`/api/v1/tokens/${t.id}`);
+      toast("Token revoked", "ok");
       load();
     } catch (err) {
-      alert("Revoke failed: " + (err instanceof Error ? err.message : err));
+      toast("Revoke failed: " + errMsg(err), "err");
     }
   };
 
   return (
     <>
       <div className="page-head">
-        <span className="eyebrow">Settings</span>
         <h1>App tokens</h1>
         <p className="sub">
           Tokens let the gpix mobile/desktop app (or any API client) sign in. A token grants full

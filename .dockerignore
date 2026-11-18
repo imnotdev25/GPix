@@ -10,7 +10,7 @@
 # Secrets and runtime state
 .env
 .env.*
-!.env.example
+!.env.sample
 secret.key
 encryption.key
 *.session
@@ -47,3 +47,12 @@ app
 
 # CI/CD
 .github
+
+# Built inside the image instead (see the "ui" stage in the Dockerfile)
+node_modules
+**/node_modules
+ui/tsconfig.tsbuildinfo
+pkg/web/dist
+
+# VCS
+.git

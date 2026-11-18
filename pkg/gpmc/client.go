@@ -22,6 +22,8 @@ type Client struct {
 	expires time.Time
 
 	drive driveTokenCache
+
+	onUpload UploadHook // may be nil
 }
 
 func (c *Client) HTTPClient() *http.Client     { return c.httpc }

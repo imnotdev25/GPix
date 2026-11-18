@@ -33,6 +33,7 @@ import (
 	"gpix/pkg/s3"
 	"gpix/pkg/share"
 	"gpix/pkg/store/gpmcstore"
+	"gpix/pkg/uploads"
 	"gpix/pkg/users"
 	"gpix/pkg/web"
 )
@@ -92,6 +93,9 @@ func main() {
 
 	switch *mode {
 	case "bot":
+		if !telegramEnabled() {
+			die("the Telegram bot is disabled; set TG_BOT_ENABLED=true to run -mode bot")
+		}
 		runBot(ctx, log, auth, *profileFlag)
 	case "web":
 		runWeb(ctx, log, auth, *cfgFlag, *secretFlag, *profileFlag)
@@ -106,9 +110,9 @@ func runAll(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, pr
 	var wg sync.WaitGroup
 	errs := make(chan error, 2)
 
-	// The Telegram bot is optional: only start it when it's configured. Without
-	// TG_BOT_TOKEN, `-mode all` just runs the web + gateways.
-	if os.Getenv("TG_BOT_TOKEN") != "" {
+	// The Telegram bot is off unless TG_BOT_ENABLED is set; otherwise `-mode all`
+	// runs just the web UI and gateways.
+	if telegramEnabled() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -117,7 +121,7 @@ func runAll(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, pr
 			}
 		}()
 	} else {
-		log.Info("telegram bot disabled (set TG_BOT_TOKEN to enable)")
+		log.Info("telegram bot disabled (set TG_BOT_ENABLED=true to enable)")
 	}
 
 	wg.Add(1)
@@ -140,6 +144,16 @@ func runAll(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, pr
 	if first != nil {
 		os.Exit(1)
 	}
+}
+
+// telegramEnabled reports whether the Telegram bot feature is switched on. It is
+// off by default, so bot credentials in the environment never start it alone.
+func telegramEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TG_BOT_ENABLED"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 func runBot(ctx context.Context, log *slog.Logger, auth, profileFlag string) {
@@ -266,8 +280,22 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 			cs.Close()
 		}
 	}()
+
+	// Log of items gpix itself uploads, per account. Google's listing can't tell
+	// gpix uploads from the phone's, so "delete gpix uploads" relies on this.
+	uploadLog, err := uploads.Open(filepath.Join(stateDir, "uploads.db"))
+	if err != nil {
+		return fmt.Errorf("uploads db: %w", err)
+	}
+	defer uploadLog.Close()
+
 	buildAccount := func(bctx context.Context, id int64, label, authData string) (*accounts.Runtime, error) {
-		agp, gerr := gpmc.New(authData, gpmc.WithDeviceProfile(profile))
+		hook := func(mediaKey, filename string) {
+			if rerr := uploadLog.Record(context.Background(), id, mediaKey, filename); rerr != nil {
+				log.Warn("upload log: record", "account", label, "err", rerr)
+			}
+		}
+		agp, gerr := gpmc.New(authData, gpmc.WithDeviceProfile(profile), gpmc.WithUploadHook(hook))
 		if gerr != nil {
 			return nil, fmt.Errorf("gpmc.New: %w", gerr)
 		}
@@ -352,7 +380,7 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 		log.Info("logto login enabled", "redirect", redirect, "max_users", cfg.MaxUsers, "allowlist", len(cfg.SignupAllowlist))
 	}
 
-	srv, err := web.New(cfg, acctMgr, gw, crypt, shareStore, oc, us, importer, apiTokens, log)
+	srv, err := web.New(cfg, acctMgr, gw, crypt, shareStore, oc, us, importer, apiTokens, uploadLog, log)
 	if err != nil {
 		return fmt.Errorf("web.New: %w", err)
 	}

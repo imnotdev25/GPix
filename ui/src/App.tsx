@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import * as api from "./api";
 import type { Me } from "./types";
 import Layout from "./components/Layout";
+import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import Library from "./pages/Library";
 import Upload from "./pages/Upload";
@@ -14,6 +15,8 @@ import Accounts from "./pages/Accounts";
 
 export default function App() {
   const [me, setMe] = useState<Me | null>(null);
+  const location = useLocation();
+  const navigate = useNavigate();
 
   const refresh = () =>
     api
@@ -35,12 +38,29 @@ export default function App() {
     );
   }
 
+  // Signed out: the landing page at "/", sign-in at /signin, and any app page
+  // sends you to sign in first, then back to where you were going.
   if (!me.signedIn) {
-    return <Login me={me} onSignedIn={refresh} />;
+    return (
+      <Routes>
+        <Route path="/" element={<Landing />} />
+        <Route path="/signin" element={<Login me={me} onSignedIn={refresh} />} />
+        <Route path="*" element={<Navigate to="/signin" replace state={{ from: location.pathname }} />} />
+      </Routes>
+    );
   }
 
+  const from = (location.state as { from?: string } | null)?.from;
+  const back = from && from.startsWith("/") && !from.startsWith("//") && from !== "/signin" ? from : "/library";
+
   return (
-    <Layout me={me} onSignedOut={refresh}>
+    <Layout
+      me={me}
+      onSignedOut={() => {
+        setMe({ ...me, user: "", signedIn: false });
+        navigate("/", { replace: true });
+      }}
+    >
       <Routes>
         <Route path="/" element={<Library />} />
         <Route path="/library" element={<Library />} />
@@ -50,6 +70,7 @@ export default function App() {
         <Route path="/connections" element={<Connections />} />
         <Route path="/tokens" element={<Tokens />} />
         <Route path="/accounts" element={<Accounts />} />
+        <Route path="/signin" element={<Navigate to={back} replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>

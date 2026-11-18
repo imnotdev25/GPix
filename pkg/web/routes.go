@@ -69,6 +69,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/media/{key}/thumb", s.requireAPIToken(s.apiThumb))
 	mux.HandleFunc("GET /api/v1/media/{key}/original", s.requireAPIToken(s.apiOriginal))
 	mux.HandleFunc("DELETE /api/v1/media/{key}", s.requireAPIToken(s.apiDelete))
+	mux.HandleFunc("POST /api/v1/media/delete", s.requireAPIToken(s.apiMediaBulkDelete))
 	mux.HandleFunc("POST /api/v1/upload", s.requireAPIToken(s.apiUpload))
 	mux.HandleFunc("GET /api/v1/shares", s.requireAPIToken(s.apiSharesList))
 	mux.HandleFunc("POST /api/v1/shares", s.requireAPIToken(s.apiShareCreate))
@@ -88,6 +89,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/tokens/{id}", s.requireAPIToken(s.apiTokensRevoke))
 
 	mux.HandleFunc("POST /api/v1/delete-all", s.requireAPIToken(s.apiDeleteAll))
+	mux.HandleFunc("GET /api/v1/gpix-uploads/summary", s.requireAPIToken(s.apiGpixUploadsSummary))
+	mux.HandleFunc("POST /api/v1/gpix-uploads/delete", s.requireAPIToken(s.apiGpixUploadsDelete))
 
 	mux.HandleFunc("GET /api/v1/accounts", s.requireAPIToken(s.apiAccounts))
 	mux.HandleFunc("POST /api/v1/accounts/{id}/switch", s.requireAPIToken(s.apiAccountSwitch))

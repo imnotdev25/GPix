@@ -1,0 +1,74 @@
+name: docker
+
+# Builds the gpix server image (web UI embedded) for linux/amd64 and
+# linux/arm64 and publishes it to GitHub Container Registry:
+#   v1.2.3 tag    → ghcr.io/<owner>/gpix:1.2.3, :1.2, :latest
+#   push to master → ghcr.io/<owner>/gpix:edge, :sha-<short>
+#   pull request  → builds only, nothing is pushed
+# Uses the built-in GITHUB_TOKEN; no secrets to configure.
+
+on:
+  push:
+    branches: [main, master, v1, v2, v3]
+    tags: ["v*"]
+    paths-ignore: ["app/**", "**/*.md"]
+  pull_request:
+    paths-ignore: ["app/**", "**/*.md"]
+  workflow_dispatch:
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    name: Build & publish image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image name
+        id: name
+        env:
+          OWNER: ${{ github.repository_owner }}
+        # Registry paths must be lowercase.
+        run: echo "image=ghcr.io/${OWNER,,}/gpix" >> "$GITHUB_OUTPUT"
+
+      - name: Tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.name.outputs.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=edge,enable={{is_default_branch}}
+            type=sha,enable=${{ github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/') }}
+            type=ref,event=pr
+          labels: |
+            org.opencontainers.image.title=gpix
+            org.opencontainers.image.description=Self-hosted Google Photos client with a web UI and S3/WebDAV gateways
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -11,7 +11,7 @@
 # Secrets and runtime state
 .env
 .env.*
-!.env.example
+!.env.sample
 secret.key
 *.session
 *.session.bak
@@ -54,3 +54,4 @@ vendor/
 /libstate*.bin
 
 node_modules
+*.tsbuildinfo

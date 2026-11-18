@@ -47,7 +47,6 @@ export default function Import() {
   return (
     <>
       <div className="page-head">
-        <span className="eyebrow">Migrate</span>
         <h1>Import</h1>
         <p className="sub">
           Copy a library into gpix from Immich or another Google account. Encryption and

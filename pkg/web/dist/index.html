@@ -5,8 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="dark light" />
     <title>gpix</title>
-    <script type="module" crossorigin src="/assets/index-D19kx0a6.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-7WA6x2vS.css">
+    <meta name="description" content="gpix is a self-hosted Google Photos client: web, desktop and phone apps, plus S3 and WebDAV access." />
+    <link rel="icon" type="image/svg+xml" href="/gpix.svg" />
+    <script>
+      // Apply the saved light/dark choice before first paint (see src/theme.ts).
+      try {
+        var t = localStorage.getItem("gpix-theme");
+        if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    </script>
+    <script type="module" crossorigin src="/assets/index-G-Hqqhqj.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-DRvyF7ku.css">
   </head>
   <body>
     <div id="root"></div>
