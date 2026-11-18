@@ -239,6 +239,12 @@ func (s *Server) apiMediaTimeline(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		loc = time.UTC
 	}
+	// Apps that can't name their zone send ?tzOffset=<minutes east of UTC>.
+	if r.URL.Query().Get("tz") == "" {
+		if m, perr := strconv.Atoi(r.URL.Query().Get("tzOffset")); perr == nil && m >= -14*60 && m <= 14*60 {
+			loc = time.FixedZone("", m*60)
+		}
+	}
 	type month struct {
 		Year  int `json:"year"`
 		Month int `json:"month"`

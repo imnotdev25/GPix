@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../api/api_client.dart';
 import '../api/models.dart';
 import '../state/app_state.dart';
+import '../util/dialogs.dart';
 
 class SharesScreen extends StatefulWidget {
   const SharesScreen({super.key});
@@ -43,30 +44,20 @@ class _SharesScreenState extends State<SharesScreen> {
   }
 
   Future<void> _revoke(ShareInfo s) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Revoke link?'),
-        content: Text(s.title.isEmpty ? s.token : s.title),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Revoke')),
-        ],
-      ),
+    final ok = await confirmDestructive(
+      context,
+      title: 'Revoke link?',
+      message: '"${s.title.isEmpty ? s.token : s.title}" will stop working '
+          'for everyone who has it.',
+      action: 'Revoke',
     );
-    if (ok != true) return;
+    if (!ok || !mounted) return;
     try {
       await _client.revokeShare(s.token);
+      if (mounted) showSnack(context, 'Link revoked');
       _load();
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Revoke failed: $e')));
-      }
+      if (mounted) showSnack(context, 'Revoke failed: $e');
     }
   }
 
@@ -124,16 +115,23 @@ class _SharesScreenState extends State<SharesScreen> {
                     mode: LaunchMode.externalApplication);
               } else if (v == 'copy') {
                 Clipboard.setData(ClipboardData(text: s.url));
-                ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Link copied')));
+                showSnack(context, 'Link copied');
+              } else if (v == 'direct') {
+                Clipboard.setData(ClipboardData(text: s.directUrl));
+                showSnack(context, 'Direct download link copied');
               } else if (v == 'revoke') {
                 _revoke(s);
               }
             },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'open', child: Text('Open')),
-              PopupMenuItem(value: 'copy', child: Text('Copy link')),
-              PopupMenuItem(value: 'revoke', child: Text('Revoke')),
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'open', child: Text('Open')),
+              const PopupMenuItem(value: 'copy', child: Text('Copy link')),
+              if (s.directUrl.isNotEmpty)
+                const PopupMenuItem(
+                  value: 'direct',
+                  child: Text('Copy direct download link'),
+                ),
+              const PopupMenuItem(value: 'revoke', child: Text('Revoke')),
             ],
           ),
         );

@@ -1,19 +1,24 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show ThemeMode;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/api_client.dart';
 
-/// AppState holds the current session (server URL + token) and persists it.
+/// AppState holds the current session (server URL + token) and the chosen
+/// theme, and persists them.
 class AppState extends ChangeNotifier {
   static const _kBaseUrl = 'baseUrl';
   static const _kToken = 'token';
+  static const _kThemeMode = 'themeMode';
 
   ApiClient? _client;
   bool loading = true;
+  ThemeMode _themeMode = ThemeMode.system;
 
   ApiClient? get client => _client;
   bool get isSignedIn => _client != null;
   String get baseUrl => _client?.baseUrl ?? '';
+  ThemeMode get themeMode => _themeMode;
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -22,8 +27,19 @@ class AppState extends ChangeNotifier {
     if (url != null && url.isNotEmpty && token != null && token.isNotEmpty) {
       _client = ApiClient(baseUrl: url, token: token);
     }
+    final mode = prefs.getString(_kThemeMode);
+    _themeMode = ThemeMode.values.firstWhere((m) => m.name == mode,
+        orElse: () => ThemeMode.system);
     loading = false;
     notifyListeners();
+  }
+
+  Future<void> setThemeMode(ThemeMode mode) async {
+    if (mode == _themeMode) return;
+    _themeMode = mode;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kThemeMode, mode.name);
   }
 
   /// Validates the given credentials against the server, then persists them.

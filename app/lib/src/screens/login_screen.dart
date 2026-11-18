@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
+import '../theme.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -74,8 +75,7 @@ class _LoginScreenState extends State<LoginScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Icon(Icons.photo_library_rounded,
-                    size: 56, color: Theme.of(context).colorScheme.primary),
+                const Center(child: BrandMark(size: 56)),
                 const SizedBox(height: 12),
                 Text('gpix',
                     textAlign: TextAlign.center,

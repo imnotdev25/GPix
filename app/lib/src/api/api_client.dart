@@ -56,17 +56,127 @@ class ApiClient {
     return PingInfo.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
   }
 
-  Future<MediaPage> listMedia({String cursor = ''}) async {
+  /// A page of up to 50 items, newest first. [cursor] continues down,
+  /// [before] (a page's prevCursor) goes back up, and [from] starts at the
+  /// first item taken before that moment. [albumId] / [tag] narrow it.
+  /// Throws ApiException 503 while the server's first listing is running.
+  Future<MediaPage> listMedia({
+    String cursor = '',
+    String before = '',
+    DateTime? from,
+    int? albumId,
+    String? tag,
+  }) async {
+    final q = <String, String>{'limit': '50'};
+    if (cursor.isNotEmpty) q['cursor'] = cursor;
+    if (before.isNotEmpty) q['before'] = before;
+    if (from != null && cursor.isEmpty && before.isEmpty) {
+      q['from'] = '${from.millisecondsSinceEpoch}';
+    }
+    _narrow(q, albumId, tag);
+    final r = await http.get(_uri('/api/v1/media', q), headers: authHeaders);
+    _check(r.statusCode, r.body);
+    return MediaPage.fromJson(_obj(r.body));
+  }
+
+  /// Items per month, newest first, in this device's time zone.
+  Future<List<TimelineMonth>> timeline({int? albumId, String? tag}) async {
+    final q = <String, String>{
+      'tzOffset': '${DateTime.now().timeZoneOffset.inMinutes}',
+    };
+    _narrow(q, albumId, tag);
     final r = await http.get(
-      _uri('/api/v1/media', cursor.isEmpty ? null : {'cursor': cursor}),
+      _uri('/api/v1/media/timeline', q),
       headers: authHeaders,
     );
     _check(r.statusCode, r.body);
-    return MediaPage.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+    return _maps(_obj(r.body)['months']).map(TimelineMonth.fromJson).toList();
   }
 
+  /// Moves items to the Google Photos trash in one request.
+  Future<({Set<String> deleted, int failed})> deleteMany(
+    List<String> keys,
+  ) async {
+    final res = await _postJson('/api/v1/media/delete', {'keys': keys});
+    return (
+      deleted: ((res['deleted'] as List?) ?? const []).map((e) => '$e').toSet(),
+      failed: (res['failed'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  // ---- albums and tags (stored by gpix) -------------------------------------
+
+  Future<List<Album>> listAlbums() async {
+    final r = await http.get(_uri('/api/v1/albums'), headers: authHeaders);
+    _check(r.statusCode, r.body);
+    return _maps(_obj(r.body)['albums']).map(Album.fromJson).toList();
+  }
+
+  Future<Album> createAlbum(String name, {List<String> keys = const []}) async =>
+      Album.fromJson(
+        await _postJson('/api/v1/albums', {'name': name, 'keys': keys}),
+      );
+
+  Future<void> renameAlbum(int id, String name) =>
+      _postJson('/api/v1/albums/$id', {'name': name});
+
+  Future<void> deleteAlbum(int id) async {
+    final r = await http.delete(_uri('/api/v1/albums/$id'), headers: authHeaders);
+    _check(r.statusCode, r.body);
+  }
+
+  Future<void> addToAlbum(int id, List<String> keys) =>
+      _postJson('/api/v1/albums/$id/items', {'keys': keys});
+
+  Future<void> removeFromAlbum(int id, List<String> keys) =>
+      _postJson('/api/v1/albums/$id/items/remove', {'keys': keys});
+
+  Future<List<TagSummary>> listTags() async {
+    final r = await http.get(_uri('/api/v1/tags'), headers: authHeaders);
+    _check(r.statusCode, r.body);
+    return _maps(_obj(r.body)['tags']).map(TagSummary.fromJson).toList();
+  }
+
+  /// Adds tags; returns every key's tags afterwards.
+  Future<Map<String, List<String>>> addTags(
+    List<String> keys,
+    List<String> tags,
+  ) async => _tagMap(
+    await _postJson('/api/v1/tags/add', {'keys': keys, 'tags': tags}),
+    keys,
+  );
+
+  /// Removes tags; returns every key's tags afterwards.
+  Future<Map<String, List<String>>> removeTags(
+    List<String> keys,
+    List<String> tags,
+  ) async => _tagMap(
+    await _postJson('/api/v1/tags/remove', {'keys': keys, 'tags': tags}),
+    keys,
+  );
+
+  // ---- accounts and Google import --------------------------------------------
+
+  Future<List<LinkedAccount>> listAccounts() async {
+    final r = await http.get(_uri('/api/v1/accounts'), headers: authHeaders);
+    _check(r.statusCode, r.body);
+    return _maps(_obj(r.body)['accounts']).map(LinkedAccount.fromJson).toList();
+  }
+
+  /// Copies another Google account's library into the active one: a linked
+  /// account ([accountId]) or a pasted GP_AUTH_DATA ([authData]).
+  Future<void> importGoogleStart({
+    int? accountId,
+    String authData = '',
+    int workers = 3,
+  }) => _postJson('/api/v1/import/google-start', {
+    if (accountId != null) 'accountId': accountId,
+    if (accountId == null) 'authData': authData.trim(),
+    'workers': workers,
+  });
+
   Future<Uint8List> fetchOriginal(MediaItem it) async {
-    final r = await http.get(_uri('${it.original}', {'download': '1'}),
+    final r = await http.get(_uri(it.original, {'download': '1'}),
         headers: authHeaders);
     _check(r.statusCode, r.body);
     return r.bodyBytes;
@@ -161,6 +271,65 @@ class ApiClient {
     final r =
         await http.post(_uri('/api/v1/import/stop'), headers: authHeaders);
     _check(r.statusCode, r.body);
+  }
+
+  /// Counts what "Delete gpix uploads" would remove from the active account.
+  Future<GpixUploadSummary> gpixUploadsSummary() async {
+    final r = await http.get(_uri('/api/v1/gpix-uploads/summary'),
+        headers: authHeaders);
+    _check(r.statusCode, r.body);
+    return GpixUploadSummary.fromJson(
+        jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  /// Trashes every gpix upload. The server refuses (HTTP 409) if the account
+  /// or the count no longer matches [reviewed].
+  Future<GpixUploadDeleteResult> deleteGpixUploads(
+      GpixUploadSummary reviewed) async {
+    final r = await http.post(
+      _uri('/api/v1/gpix-uploads/delete'),
+      headers: {...authHeaders, 'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'confirm': 'DELETE',
+        'accountId': reviewed.accountId,
+        'expected': reviewed.total,
+      }),
+    );
+    _check(r.statusCode, r.body);
+    return GpixUploadDeleteResult.fromJson(
+        jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  void _narrow(Map<String, String> q, int? albumId, String? tag) {
+    if (albumId != null) q['album'] = '$albumId';
+    if (tag != null && tag.isNotEmpty) q['tag'] = tag;
+  }
+
+  Map<String, dynamic> _obj(String body) {
+    if (body.trim().isEmpty) return const {};
+    final d = jsonDecode(body);
+    return d is Map<String, dynamic> ? d : const {};
+  }
+
+  List<Map<String, dynamic>> _maps(dynamic v) =>
+      ((v as List?) ?? const []).whereType<Map<String, dynamic>>().toList();
+
+  Map<String, List<String>> _tagMap(Map<String, dynamic> res, List<String> keys) {
+    final raw = (res['tags'] as Map?) ?? const {};
+    return {
+      for (final k in keys)
+        k: ((raw[k] as List?) ?? const []).map((e) => '$e').toList(),
+    };
+  }
+
+  Future<Map<String, dynamic>> _postJson(String path, Object body) async {
+    final r = await http.post(
+      _uri(path),
+      headers: {...authHeaders, 'Content-Type': 'application/json'},
+      body: jsonEncode(body),
+    );
+    _check(r.statusCode, r.body);
+    return _obj(r.body);
   }
 
   void _check(int status, String body) {
