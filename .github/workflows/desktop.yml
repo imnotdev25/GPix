@@ -98,12 +98,10 @@ jobs:
         run: bash tool/build_macos_dmg.sh
       - name: Package
         working-directory: app
+        # The .dmg is the only macOS download; the release attaches it as is.
         run: |
           mkdir -p out
           cp build/gpix.dmg "out/gpix_${VERSION}_macos.dmg"
-          APP="$(ls -d build/macos/Build/Products/Release/*.app | head -n1)"
-          ( cd "$(dirname "$APP")" && zip -qry - "$(basename "$APP")" ) \
-            > "out/gpix_${VERSION}_macos.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: app-macos

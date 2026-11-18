@@ -115,7 +115,7 @@ jobs:
           body: |
             Automated cross-platform build for `${{ github.ref_name }}`.
 
-            **Server (Go)** — `gpix_<ver>_<os>_<arch>.tar.gz` / `.zip` for Linux, macOS, and Windows (amd64 + arm64). Verify downloads against `checksums-server.txt`.
+            **Server (Go)** — `gpix_<ver>_<os>_<arch>.tar.gz` / `.zip` for Linux and macOS (amd64 + arm64) and Windows (amd64). Verify downloads against `checksums-server.txt`.
 
             **Docker** — `docker pull ghcr.io/${{ github.repository_owner }}/gpix:latest` (linux/amd64 + linux/arm64; the version tag drops the leading `v`).
 
@@ -125,6 +125,6 @@ jobs:
             - `..._amd64.deb` — `sudo apt install ./gpix_..._amd64.deb`, then launch "gpix" from the app menu (or run `gpix-app`).
             - `..._linux-x64.AppImage` — `chmod +x` and run (needs GTK 3 on the host).
             - `..._linux-x64.tar.gz` — extract and run `./install.sh` for a per-user install with menu entry and icon.
-            - `..._macos.dmg` — open and drag gpix_app to Applications. `..._macos.zip` is the same app zipped. Unsigned; first launch: right-click → **Open**, or `xattr -dr com.apple.quarantine /Applications/gpix_app.app`.
+            - `..._macos.dmg` — open it and drag gpix_app to Applications. Unsigned; first launch: right-click → **Open**, or `xattr -dr com.apple.quarantine /Applications/gpix_app.app`.
 
             iOS isn't included (requires code signing). Build it locally per `app/README.md`.

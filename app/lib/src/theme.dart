@@ -224,33 +224,33 @@ ThemeData buildGpixTheme(Brightness brightness) {
   );
 }
 
-/// The gpix logo mark: a gradient rounded square with a "g", as in the web
+/// The gpix logo (the app icon: a flower frame around a photo), as in the web
 /// sidebar.
 class BrandMark extends StatelessWidget {
   const BrandMark({super.key, this.size = 32});
   final double size;
 
+  // The icon's rounded square spans 824 of its 1024 px. Scale it up so the
+  // mark fills [size] instead of carrying the icon's transparent margin.
+  static const _fill = 1024 / 824;
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: size,
-      height: size,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(size * 0.3),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [GpixPalette.accent, GpixPalette.accent2],
-        ),
-      ),
-      child: Text(
-        'g',
-        style: TextStyle(
-          color: Colors.white,
-          fontWeight: FontWeight.w700,
-          fontSize: size * 0.5,
-          height: 1,
+    final drawn = size * _fill;
+    return ExcludeSemantics(
+      child: SizedBox.square(
+        dimension: size,
+        child: OverflowBox(
+          maxWidth: drawn,
+          maxHeight: drawn,
+          child: Image.asset(
+            'assets/icon/gpix.png',
+            width: drawn,
+            height: drawn,
+            // Decode at display size, not 1024 px.
+            cacheWidth: (drawn * MediaQuery.devicePixelRatioOf(context)).ceil(),
+            filterQuality: FilterQuality.medium,
+          ),
         ),
       ),
     );

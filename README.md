@@ -543,7 +543,7 @@ git push origin v0.1.0
 That publishes a GitHub Release containing:
 
 - **Server binaries** — Linux and macOS for amd64 + arm64, and Windows for amd64, cross-compiled from a single runner (the server is CGO-free), with `checksums-server.txt`.
-- **App builds** — an Android APK; a Windows installer and portable `.zip`; a Linux `.deb`, AppImage and `.tar.gz`; and a macOS `.dmg` and `.zip`. The desktop builds come from `.github/workflows/desktop.yml`. They're unsigned, so Windows SmartScreen and macOS Gatekeeper warn on first launch; the release notes say how to get past that.
+- **App builds** — an Android APK; a Windows installer and portable `.zip`; a Linux `.deb`, AppImage and `.tar.gz`; and a macOS `.dmg`. The desktop builds come from `.github/workflows/desktop.yml`. They're unsigned, so Windows SmartScreen and macOS Gatekeeper warn on first launch; the release notes say how to get past that.
 
 iOS is intentionally excluded — App Store / device installs require code signing; build it locally per [`app/README.md`](app/README.md).
 
