@@ -4,6 +4,7 @@ import * as api from "../api";
 import type { MediaItem } from "../types";
 import Icon from "../components/Icon";
 import ShareDialog from "../components/ShareDialog";
+import { TagDialog } from "../components/CollectionDialogs";
 import { errMsg, useConfirm, useToast } from "../components/feedback";
 import { formatBytes, formatDateTime, parseDate } from "../format";
 
@@ -68,12 +69,14 @@ export default function Viewer({
   onClose,
   onIndex,
   onDeleted,
+  onTagsChanged,
 }: {
   items: MediaItem[];
   index: number;
   onClose: () => void;
   onIndex: (i: number) => void;
   onDeleted: (key: string) => void;
+  onTagsChanged?: (key: string, tags: string[]) => void;
 }) {
   const item = items[index];
   const isImage = item.class === "photo" || item.class === "doc";
@@ -81,6 +84,7 @@ export default function Viewer({
   const [info, setInfo] = useState(initialInfo);
   const [sharing, setSharing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [tagging, setTagging] = useState(false);
   const [idle, setIdle] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -592,7 +596,9 @@ export default function Viewer({
 
   const onImgLoad = () => {
     const img = imgRef.current;
-    if (!img?.naturalWidth) return;
+    // A 1×1 image is the server's "still rendering" placeholder: keep the
+    // spinner up until the full-size image arrives.
+    if (!img || img.naturalWidth <= 1) return;
     const requested = img.getAttribute("src") === fullUrl ? FULL : PREVIEW;
     setNat({
       key: item.key,
@@ -711,6 +717,20 @@ export default function Viewer({
                   "Not encrypted"
                 )}
               </dd>
+              <dt>Tags</dt>
+              <dd>
+                <div className="chips">
+                  {(item.tags ?? []).map((t) => (
+                    <span key={t} className="chip">
+                      #{t}
+                    </span>
+                  ))}
+                  <button className="chip chip-add" onClick={() => setTagging(true)}>
+                    <Icon name="tag" size={12} />
+                    {item.tags?.length ? "Edit" : "Add tags"}
+                  </button>
+                </div>
+              </dd>
             </dl>
           </aside>
         )}
@@ -771,6 +791,14 @@ export default function Viewer({
       </div>
 
       {sharing && <ShareDialog keys={[item.key]} defaultTitle={item.name} onClose={() => setSharing(false)} />}
+      {tagging && (
+        <TagDialog
+          keys={[item.key]}
+          initial={item.tags ?? []}
+          onClose={() => setTagging(false)}
+          onDone={(t) => onTagsChanged?.(item.key, t[item.key] ?? [])}
+        />
+      )}
     </div>
   );
 }

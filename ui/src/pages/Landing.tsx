@@ -9,6 +9,11 @@ const features: { icon: IconName; title: string; text: string }[] = [
     text: "A fast grid grouped by day, a full-screen viewer with zoom and swipe, video streaming, and bulk select to share, download or delete.",
   },
   {
+    icon: "album",
+    title: "Albums, tags and a timeline",
+    text: "Photos are dated from their camera metadata. Jump through years and months with the scrubber, and sort things into albums and tags.",
+  },
+  {
     icon: "upload",
     title: "Upload anything",
     text: "Drag in photos, videos or any other file. Documents and archives are stored too, and come back byte-for-byte when you download them.",
@@ -46,7 +51,9 @@ const features: { icon: IconName; title: string; text: string }[] = [
 ];
 
 /** Public page shown to signed-out visitors at "/". */
-export default function Landing() {
+export default function Landing({ setup = false }: { setup?: boolean }) {
+  // On a fresh server the first visitor creates the owner account.
+  const cta = setup ? "Create your account" : "Sign in to your library";
   return (
     <div className="landing">
       <header className="landing-wrap landing-top">
@@ -54,7 +61,7 @@ export default function Landing() {
         <strong>gpix</strong>
         <div className="spacer" />
         <Link className="btn" to="/signin">
-          Sign in
+          {setup ? "Set up" : "Sign in"}
         </Link>
       </header>
 
@@ -68,7 +75,7 @@ export default function Landing() {
             </p>
             <div className="landing-cta">
               <Link className="btn btn-primary" to="/signin">
-                Sign in to your library
+                {cta}
               </Link>
               <a className="text-link" href="#features">
                 See what it does

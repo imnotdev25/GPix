@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -13,6 +14,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -24,6 +28,12 @@ import (
 )
 
 const thumbCacheMaxBytes = 40 << 20 // don't try to thumbnail decrypted images larger than this
+
+// thumbSizes are the sizes gpix renders for an encrypted/disguised item, all
+// from one download + decrypt + decode: the grid (512, 256 for the app) and the
+// full-screen viewer (2048). Decrypting the original is the slow part, so it
+// happens once per item instead of once per size.
+var thumbSizes = []int{512, 256, 2048}
 
 // readCloser ties a logical reader to the underlying closer.
 type webReadCloser struct {
@@ -115,6 +125,18 @@ func thumbKindMeta(kind string) (ext, contentType string) {
 	return "jpg", "image/jpeg"
 }
 
+// thumbKindFor says what gpix renders for a disguised item: "photo", "doc",
+// or "" when it can't make a thumbnail.
+func thumbKindFor(display string, class mediaClass) string {
+	switch {
+	case class == classDoc:
+		return "doc"
+	case class == classPhoto && canGenerateThumb(display):
+		return "photo"
+	}
+	return ""
+}
+
 // cachedThumbFile returns a previously generated thumbnail from disk, if present.
 func (s *Server) cachedThumbFile(mediaKey string, size int, kind string) ([]byte, string, bool) {
 	if s.thumbDir == "" {
@@ -127,72 +149,225 @@ func (s *Server) cachedThumbFile(mediaKey string, size int, kind string) ([]byte
 	return nil, "", false
 }
 
-// thumbBytes returns the generated thumbnail for a disguised photo/doc, using
-// the on-disk cache. It decrypts the original, which is why callers must keep it
-// OFF the hot grid path (see queueThumb) — only the single-item view generates
-// synchronously. kind is "photo" (JPEG) or "doc" (PNG).
-func (s *Server) thumbBytes(ctx context.Context, mediaKey, name string, size int, kind string) ([]byte, string, error) {
-	ext, ct := thumbKindMeta(kind)
-	path := s.thumbCachePath(mediaKey, size, ext)
-	if data, err := os.ReadFile(path); err == nil {
+// thumbCached reports whether a thumbnail is on disk, without reading it.
+func (s *Server) thumbCached(mediaKey string, size int, kind string) bool {
+	if s.thumbDir == "" {
+		return false
+	}
+	ext, _ := thumbKindMeta(kind)
+	_, err := os.Stat(s.thumbCachePath(mediaKey, size, ext))
+	return err == nil
+}
+
+// thumbBytes returns a generated thumbnail, rendering it (with the other
+// sizes) first if needed. Only the single-item view calls this directly; the
+// grid goes through queueThumb so it never waits on a decrypt.
+func (s *Server) thumbBytes(ctx context.Context, mediaKey string, size int, kind string) ([]byte, string, error) {
+	if data, ct, ok := s.cachedThumbFile(mediaKey, size, kind); ok {
 		return data, ct, nil
 	}
-	unlock := s.thumbLock(path)
-	defer unlock()
-	if data, err := os.ReadFile(path); err == nil { // generated while we waited
+	if err := s.renderThumbs(ctx, mediaKey, kind, nil, size); err != nil {
+		return nil, "", err
+	}
+	if data, ct, ok := s.cachedThumbFile(mediaKey, size, kind); ok {
 		return data, ct, nil
+	}
+	return nil, "", errors.New("thumbnail was not written")
+}
+
+// renderThumbs writes every missing thumbnail size (thumbSizes plus any extra)
+// for an item from a single read of the original. open supplies the plaintext
+// (e.g. a file just uploaded); nil downloads and decrypts the stored original.
+// Concurrent calls for one item wait for each other and then find the files.
+func (s *Server) renderThumbs(ctx context.Context, mediaKey, kind string, open func() (io.ReadCloser, error), extra ...int) error {
+	if s.thumbDir == "" {
+		return errors.New("no thumbnail cache directory")
+	}
+	unlock := s.thumbLock(mediaKey)
+	defer unlock()
+
+	ext, _ := thumbKindMeta(kind)
+	var missing []int
+	for _, sz := range append(slices.Clone(thumbSizes), extra...) {
+		if sz <= 0 || slices.Contains(missing, sz) {
+			continue
+		}
+		if _, err := os.Stat(s.thumbCachePath(mediaKey, sz, ext)); err != nil {
+			missing = append(missing, sz)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
 	}
 
-	rc, _, err := s.openDecrypted(ctx, mediaKey)
+	var (
+		rc  io.ReadCloser
+		err error
+	)
+	if open != nil {
+		rc, err = open()
+	} else {
+		rc, _, err = s.openDecrypted(ctx, mediaKey)
+	}
 	if err != nil {
-		return nil, "", err
+		return err
 	}
 	defer rc.Close()
 
-	bw := &byteWriter{}
 	if kind == "doc" {
-		content, rerr := io.ReadAll(io.LimitReader(rc, 512<<10)) // first 512 KB
-		if rerr != nil {
-			return nil, "", rerr
+		content, err := io.ReadAll(io.LimitReader(rc, 512<<10)) // first 512 KB
+		if err != nil {
+			return err
 		}
-		width, maxLines := docRenderParams(size)
-		if err := png.Encode(bw, renderDocImage(content, width, maxLines)); err != nil {
-			return nil, "", err
+		for _, sz := range missing {
+			width, maxLines := docRenderParams(sz)
+			bw := &byteWriter{}
+			if err := png.Encode(bw, renderDocImage(content, width, maxLines)); err != nil {
+				return err
+			}
+			if err := s.writeThumbFile(mediaKey, sz, ext, bw.b); err != nil {
+				return err
+			}
 		}
-	} else {
-		img, _, derr := image.Decode(io.LimitReader(rc, thumbCacheMaxBytes))
-		if derr != nil {
-			return nil, "", derr
+		return nil
+	}
+
+	img, _, err := image.Decode(io.LimitReader(rc, thumbCacheMaxBytes))
+	if err != nil {
+		return err
+	}
+	// One pass over the full-size original down to the largest size, then the
+	// smaller ones from that. Smallest first, so grid tiles fill in soonest.
+	slices.Sort(missing)
+	big := downscale(img, missing[len(missing)-1])
+	for _, sz := range missing {
+		bw := &byteWriter{}
+		if err := jpeg.Encode(bw, downscale(big, sz), &jpeg.Options{Quality: 82}); err != nil {
+			return err
 		}
-		if err := jpeg.Encode(bw, downscale(img, size), &jpeg.Options{Quality: 82}); err != nil {
-			return nil, "", err
+		if err := s.writeThumbFile(mediaKey, sz, ext, bw.b); err != nil {
+			return err
 		}
 	}
-	_ = os.WriteFile(path, bw.b, 0o600) // best-effort cache write
-	return bw.b, ct, nil
+	return nil
 }
 
-// queueThumb generates a thumbnail in the background (bounded concurrency) so a
-// grid request never blocks on a decrypt+download. If the worker pool is full it
-// simply skips — the next grid load will try again.
-func (s *Server) queueThumb(mediaKey, name string, size int, kind string) {
-	if s.thumbSem == nil {
-		return
+// writeThumbFile writes a thumbnail atomically, so a reader never sees half a file.
+func (s *Server) writeThumbFile(mediaKey string, size int, ext string, data []byte) error {
+	tmp, err := os.CreateTemp(s.thumbDir, ".tmp-*")
+	if err != nil {
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return os.Rename(tmp.Name(), s.thumbCachePath(mediaKey, size, ext))
+}
+
+// thumbJob is one item for the background thumbnail workers.
+type thumbJob struct {
+	key, kind string
+	extra     int                           // a size outside thumbSizes, or 0
+	open      func() (io.ReadCloser, error) // nil: download + decrypt
+	cleanup   func()                        // run once the job is done or dropped
+}
+
+// queueThumb renders an item's thumbnails in the background (bounded worker
+// pool), so a grid request never waits on a download + decrypt. Requests for an
+// item that's already queued are merged. It returns false if the queue is full.
+func (s *Server) queueThumb(j thumbJob) bool {
+	drop := func() {
+		if j.cleanup != nil {
+			j.cleanup()
+		}
+	}
+	if s.thumbJobs == nil {
+		drop()
+		return false
+	}
+	qk := j.key + "|" + strconv.Itoa(j.extra)
+	if _, dup := s.thumbQueued.LoadOrStore(qk, true); dup {
+		drop()
+		return true
 	}
 	select {
-	case s.thumbSem <- struct{}{}:
+	case s.thumbJobs <- j:
+		return true
 	default:
-		return // at capacity; try again next time
+		s.thumbQueued.Delete(qk)
+		drop()
+		s.log.Debug("thumbnail queue full; the grid will ask again", "key", j.key)
+		return false
 	}
-	go func() {
-		defer func() { <-s.thumbSem }()
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		if _, _, err := s.thumbBytes(ctx, mediaKey, name, size, kind); err != nil {
-			s.log.Debug("background thumb", "key", mediaKey, "err", err)
-		}
-	}()
 }
+
+// logThumbFailure warns about failed renders, at most 5 a minute; the rest go
+// to debug, so a folder of files gpix can't decode doesn't flood the log.
+func (s *Server) logThumbFailure(key string, err error) {
+	s.thumbLogMu.Lock()
+	now := time.Now()
+	if now.Sub(s.thumbLogAt) > time.Minute {
+		s.thumbLogAt, s.thumbLogN = now, 0
+	}
+	s.thumbLogN++
+	n := s.thumbLogN
+	s.thumbLogMu.Unlock()
+	switch {
+	case n <= 5:
+		s.log.Warn("thumbnail render failed; will retry in 10 minutes", "key", key, "err", err)
+	case n == 6:
+		s.log.Warn("more thumbnail renders failing; further failures this minute are logged at debug level")
+	default:
+		s.log.Debug("thumbnail render failed", "key", key, "err", err)
+	}
+}
+
+func (s *Server) thumbWorker() {
+	for j := range s.thumbJobs {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		var extra []int
+		if j.extra > 0 {
+			extra = []int{j.extra}
+		}
+		start := time.Now()
+		if err := s.renderThumbs(ctx, j.key, j.kind, j.open, extra...); err != nil {
+			s.thumbFailed.Store(j.key, time.Now())
+			s.logThumbFailure(j.key, err)
+		} else {
+			s.thumbFailed.Delete(j.key)
+			s.log.Debug("thumbnail rendered", "key", j.key, "kind", j.kind, "ms", time.Since(start).Milliseconds())
+		}
+		cancel()
+		if j.cleanup != nil {
+			j.cleanup()
+		}
+		s.thumbQueued.Delete(j.key + "|" + strconv.Itoa(j.extra))
+	}
+}
+
+// thumbRecentlyFailed reports a render that failed in the last 10 minutes, so
+// neither gpix nor the client keeps retrying a file it can't decode.
+func (s *Server) thumbRecentlyFailed(key string) bool {
+	v, ok := s.thumbFailed.Load(key)
+	if !ok {
+		return false
+	}
+	if time.Since(v.(time.Time)) > 10*time.Minute {
+		s.thumbFailed.Delete(key)
+		return false
+	}
+	return true
+}
+
+// thumbWorkers sizes the pool: decoding is CPU-heavy and holds a full-size
+// image in memory, so stay between 2 and 6.
+func thumbWorkers() int { return min(max(runtime.NumCPU(), 2), 6) }
 
 // docRenderParams maps a requested thumbnail size to a render width and line cap:
 // small sizes are grid previews, large sizes are the full-page document view.
@@ -210,7 +385,7 @@ func writeThumb(w http.ResponseWriter, data []byte, contentType string) {
 	_, _ = w.Write(data)
 }
 
-// thumbLock returns an unlock func, serialising generation per cache path.
+// thumbLock returns an unlock func, serialising generation per media key.
 func (s *Server) thumbLock(key string) func() {
 	mu, _ := s.thumbLocks.LoadOrStore(key, &sync.Mutex{})
 	m := mu.(*sync.Mutex)

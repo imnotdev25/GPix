@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"errors"
 	"flag"
 	"fmt"
@@ -20,6 +19,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"gpix/pkg/accounts"
+	"gpix/pkg/albums"
 	"gpix/pkg/apitoken"
 	"gpix/pkg/bridge"
 	"gpix/pkg/cachedb"
@@ -47,8 +47,8 @@ func main() {
 	authFlag := flag.String("auth", "", "GP auth_data (defaults to $GP_AUTH_DATA)")
 	profileFlag := flag.String("profile", "", "pixel-xl | pixel-5 (default: from web config or pixel-xl)")
 	logLevel := flag.String("log", "info", "debug | info | warn | error")
-	cfgFlag := flag.String("config", "gpix-web.conf", "path to web config file")
-	secretFlag := flag.String("secret", "", "path to secret.key (default: alongside config)")
+	cfgFlag := flag.String("config", "gpix-web.conf", "deprecated: gpix-web.conf is no longer read (settings come from .env); its folder is still the default state folder")
+	secretFlag := flag.String("secret", "", "path to secret.key (default: in GPIX_DATA_DIR, else the working directory)")
 
 	qualityFlag := flag.String("quality", "original", "[cli] original | saver | quota")
 	conc := flag.Int("concurrency", 1, "[cli] parallel uploads")
@@ -68,8 +68,20 @@ func main() {
 	if err := loadDotEnv(*envFlag); err != nil {
 		fmt.Fprintln(os.Stderr, "warn: load env:", err)
 	}
+	// Apply a TZ set in .env (photo capture dates without a zone are read in it).
+	if tz := os.Getenv("TZ"); tz != "" {
+		if loc, err := time.LoadLocation(tz); err == nil {
+			time.Local = loc
+		}
+	}
 
-	log := newLogger(*logLevel)
+	logFlagSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "log" {
+			logFlagSet = true
+		}
+	})
+	log := newLogger(*logLevel, logFlagSet)
 
 	switch *mode {
 	case "hashpw":
@@ -200,10 +212,16 @@ func startBot(ctx context.Context, log *slog.Logger, auth, profileFlag string) e
 }
 
 func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, profileFlag string) error {
-	cfg, err := web.LoadConfig(cfgPath)
-	if err != nil {
-		return fmt.Errorf("config: %w", err)
+	// Settings come only from the environment (.env). An old gpix-web.conf is
+	// no longer read; say what to move rather than ignoring it silently.
+	if vars, found := web.LegacyConfVars(cfgPath); found {
+		if len(vars) > 0 {
+			log.Warn("gpix-web.conf is no longer read; put these in .env instead", "file", cfgPath, "set", strings.Join(vars, ", "))
+		} else {
+			log.Warn("gpix-web.conf is no longer read and can be deleted", "file", cfgPath)
+		}
 	}
+	cfg := web.LoadConfig()
 
 	if secretPath == "" {
 		dir := cfg.DataDir
@@ -214,6 +232,9 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 			_ = os.MkdirAll(dir, 0o700)
 		}
 		secretPath = filepath.Join(dir, "secret.key")
+	}
+	if cfg.DataDir == "" {
+		cfg.DataDir = filepath.Dir(secretPath) // keep the thumbnail cache with the rest of the state
 	}
 	secret, err := web.LoadOrCreateSecret(secretPath)
 	if err != nil {
@@ -290,8 +311,13 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 	defer uploadLog.Close()
 
 	buildAccount := func(bctx context.Context, id int64, label, authData string) (*accounts.Runtime, error) {
-		hook := func(mediaKey, filename string) {
-			if rerr := uploadLog.Record(context.Background(), id, mediaKey, filename); rerr != nil {
+		var alib *library.Cache
+		hook := func(it gpmc.MediaItem) {
+			// List the upload right away instead of after the next full listing.
+			if alib != nil {
+				alib.Add(it)
+			}
+			if rerr := uploadLog.Record(context.Background(), id, it.MediaKey, it.Filename); rerr != nil {
 				log.Warn("upload log: record", "account", label, "err", rerr)
 			}
 		}
@@ -304,7 +330,8 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 			return nil, fmt.Errorf("cache db: %w", cerr)
 		}
 		cacheStores = append(cacheStores, cs)
-		alib := library.New(agp, 0, cs)
+		alib = library.New(agp, 0, cs)
+		alib.SetLogger(log.With("account", label))
 		alib.Start(ctx, 0)
 		// Bounded warm-up so the first S3/WebDAV listing serves from memory instead
 		// of blocking a client on a cold full walk of Google. Instant when a
@@ -353,11 +380,28 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 	}
 	defer apiTokens.Close()
 
-	// Optional Logto / OIDC login with email allowlist + max-users cap.
-	var (
-		oc *oidc.Client
-		us *users.Store
-	)
+	// Sign-in accounts: created by sign-up (until GPIX_MAX_USERS accounts
+	// exist) or by single sign-on, both limited by GPIX_SIGNUP_ALLOWLIST.
+	us, err := users.Open(filepath.Join(stateDir, "users.db"))
+	if err != nil {
+		return fmt.Errorf("users db: %w", err)
+	}
+	defer us.Close()
+	if cfg.LegacyUsername != "" && cfg.LegacyPasswordHash != "" {
+		created, ierr := us.ImportLogin(ctx, cfg.LegacyUsername, cfg.LegacyPasswordHash)
+		if ierr != nil {
+			return fmt.Errorf("import GPIX_USERNAME login: %w", ierr)
+		}
+		if created {
+			log.Info("imported the GPIX_USERNAME / GPIX_PASSWORD_HASH login as an account; you can remove both from .env", "login", cfg.LegacyUsername)
+		}
+	}
+	if n, cerr := us.Count(ctx); cerr == nil && n == 0 {
+		log.Info("no accounts yet: open the web UI to create the first one", "max_users", cfg.MaxUsers)
+	}
+
+	// Optional Logto / OIDC single sign-on.
+	var oc *oidc.Client
 	if cfg.LogtoEnabled() {
 		redirect := cfg.LogtoRedirect
 		if redirect == "" {
@@ -372,24 +416,31 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 			ClientSecret: cfg.LogtoClientSecret,
 			RedirectURL:  redirect,
 		})
-		us, err = users.Open(filepath.Join(filepath.Dir(secretPath), "users.db"))
-		if err != nil {
-			return fmt.Errorf("users db: %w", err)
-		}
-		defer us.Close()
 		log.Info("logto login enabled", "redirect", redirect, "max_users", cfg.MaxUsers, "allowlist", len(cfg.SignupAllowlist))
 	}
 
-	srv, err := web.New(cfg, acctMgr, gw, crypt, shareStore, oc, us, importer, apiTokens, uploadLog, log)
+	// gpix's own albums and tags (not synced with Google Photos albums).
+	albumStore, err := albums.Open(filepath.Join(stateDir, "albums.db"))
+	if err != nil {
+		return fmt.Errorf("albums db: %w", err)
+	}
+	defer albumStore.Close()
+
+	srv, err := web.New(cfg, acctMgr, gw, crypt, shareStore, oc, us, importer, apiTokens, uploadLog, albumStore, log)
 	if err != nil {
 		return fmt.Errorf("web.New: %w", err)
 	}
 
 	log.Info("gpix web started",
 		"listen", cfg.Listen,
-		"username", cfg.Username,
 		"profile", profileName,
-		"secret_path", secretPath,
+		"data_dir", cfg.DataDir,
+		"max_users", cfg.MaxUsers,
+		"signup_allowlist", len(cfg.SignupAllowlist),
+		"password_login", !cfg.DisablePasswordLogin,
+		"thumb_gen", cfg.ThumbGen,
+		"s3", cfg.S3Listen != "",
+		"webdav", cfg.WebDAVListen != "",
 	)
 
 	runners := []func(context.Context) error{srv.Run}
@@ -415,7 +466,7 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 			Listen:   cfg.WebDAVListen,
 			BasePath: cfg.WebDAVBasePath,
 			Realm:    "gpix",
-		}, be, basicAuthChecker(cfg.Username, cfg.PasswordHash, gw), log.With("service", "webdav"))
+		}, be, basicAuthChecker(us, gw), log.With("service", "webdav"))
 		if err != nil {
 			return fmt.Errorf("dav.New: %w", err)
 		}
@@ -455,41 +506,38 @@ func runConcurrently(ctx context.Context, runners []func(context.Context) error)
 	return nil
 }
 
-// basicAuthChecker returns a dav.Authenticator validating the WebDAV username
-// against either the main bcrypt login password or the optional, revocable app
-// password from the gateway store. Successful (username,password) pairs are
-// cached by a SHA-256 fingerprint so bcrypt runs at most once per distinct
-// password — WebDAV clients issue many requests per session.
-func basicAuthChecker(username, passwordHash string, gw *gwcreds.Store) dav.Authenticator {
+// basicAuthChecker returns a dav.Authenticator for WebDAV Basic auth: the
+// username is a gpix account's email (or imported login) and the password is
+// that account's password or the revocable WebDAV app password. Successful
+// pairs are remembered for a few minutes by a SHA-256 fingerprint, so bcrypt
+// doesn't run on each of the many requests a WebDAV client makes.
+func basicAuthChecker(us *users.Store, gw *gwcreds.Store) dav.Authenticator {
 	var (
-		mu        sync.RWMutex
-		goodPrint [32]byte
-		haveGood  bool
+		mu   sync.Mutex
+		good = map[[32]byte]time.Time{}
 	)
-	fingerprint := func(user, pass string) [32]byte {
-		return sha256.Sum256([]byte(user + "\x00" + pass))
-	}
 	return func(user, pass string) bool {
-		if subtle.ConstantTimeCompare([]byte(user), []byte(username)) != 1 {
-			return false
-		}
-		// App password (cheap, constant-time) takes the fast path.
-		if gw != nil && gw.CheckWebDAVPassword(pass) {
+		ctx := context.Background()
+		fp := sha256.Sum256([]byte(user + "\x00" + pass))
+		mu.Lock()
+		t, ok := good[fp]
+		mu.Unlock()
+		if ok && time.Since(t) < 5*time.Minute {
 			return true
 		}
-		fp := fingerprint(user, pass)
-		mu.RLock()
-		cached := haveGood && subtle.ConstantTimeCompare(goodPrint[:], fp[:]) == 1
-		mu.RUnlock()
-		if cached {
-			return true
-		}
-		if bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(pass)) != nil {
+		_, uerr := us.GetByEmail(ctx, user)
+		switch {
+		case uerr != nil:
+			_, _ = us.Authenticate(ctx, user, pass) // same cost as a wrong password
 			return false
+		case gw != nil && gw.CheckWebDAVPassword(pass):
+		default:
+			if _, err := us.Authenticate(ctx, user, pass); err != nil {
+				return false
+			}
 		}
 		mu.Lock()
-		goodPrint = fp
-		haveGood = true
+		good[fp] = time.Now()
 		mu.Unlock()
 		return true
 	}
@@ -598,19 +646,45 @@ func parseProfile(s string) (gpmc.DeviceProfile, error) {
 	return gpmc.DeviceProfile{}, fmt.Errorf("unknown profile %q", s)
 }
 
-func newLogger(level string) *slog.Logger {
+// newLogger builds the logger from the -log flag (when given) or GPIX_LOG_LEVEL,
+// and GPIX_LOG_FORMAT (text, the default, or json for log collectors). It also
+// becomes slog's default, so packages that fall back to it log the same way.
+func newLogger(flagLevel string, flagSet bool) *slog.Logger {
+	level := flagLevel
+	if !flagSet {
+		level = coalesce(os.Getenv("GPIX_LOG_LEVEL"), "info")
+	}
 	var lvl slog.Level
-	switch level {
+	badLevel := false
+	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "debug":
 		lvl = slog.LevelDebug
-	case "warn":
+	case "info", "":
+		lvl = slog.LevelInfo
+	case "warn", "warning":
 		lvl = slog.LevelWarn
 	case "error":
 		lvl = slog.LevelError
 	default:
-		lvl = slog.LevelInfo
+		lvl, badLevel = slog.LevelInfo, true
 	}
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl}))
+	opts := &slog.HandlerOptions{Level: lvl}
+	format := strings.ToLower(strings.TrimSpace(os.Getenv("GPIX_LOG_FORMAT")))
+	var h slog.Handler
+	if format == "json" {
+		h = slog.NewJSONHandler(os.Stderr, opts)
+	} else {
+		h = slog.NewTextHandler(os.Stderr, opts)
+	}
+	l := slog.New(h)
+	if badLevel {
+		l.Warn("unknown log level; using info", "level", level)
+	}
+	if format != "" && format != "json" && format != "text" {
+		l.Warn("unknown GPIX_LOG_FORMAT; using text", "format", format)
+	}
+	slog.SetDefault(l)
+	return l
 }
 
 func coalesce(vs ...string) string {

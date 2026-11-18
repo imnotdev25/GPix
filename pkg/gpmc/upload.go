@@ -159,7 +159,14 @@ func (c *Client) uploadOne(ctx context.Context, path string, opts UploadOpts, pr
 
 	res.MediaKey = key
 	if c.onUpload != nil && key != "" {
-		c.onUpload(key, name)
+		c.onUpload(MediaItem{
+			MediaKey:  key,
+			Filename:  name,
+			Kind:      KindForName(name),
+			SizeBytes: size,
+			Mtime:     time.UnixMilli(mtime.UnixMilli()), // the precision Google lists
+			SHA1:      digest,
+		})
 	}
 	emit(StageDone, size, size, nil)
 	if opts.DeleteAfter {

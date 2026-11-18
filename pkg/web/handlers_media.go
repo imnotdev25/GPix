@@ -2,12 +2,17 @@ package web
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
+	"image"
+	"image/color"
+	"image/gif"
 	"io"
 	"mime"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"time"
 
@@ -38,30 +43,53 @@ func thumbSize(r *http.Request) int {
 	return size
 }
 
+// pendingThumbGIF is a 1×1 transparent GIF served while an encrypted item's
+// real thumbnail renders in the background. Clients retry until a real image
+// arrives; Cache-Control: no-store keeps anything from caching it.
+var pendingThumbGIF = func() []byte {
+	var b bytes.Buffer
+	_ = gif.Encode(&b, image.NewPaletted(image.Rect(0, 0, 1, 1), color.Palette{color.Transparent}), nil)
+	return b.Bytes()
+}()
+
 func (s *Server) serveThumb(w http.ResponseWriter, r *http.Request, key string, size int) {
 	// Encrypted/disguised items have only a blank thumbnail on Google's side, so
-	// gpix renders one locally (photos from the decrypted original, documents as
-	// a text image) and caches it. This must never block the grid: a cache hit is
-	// served instantly; otherwise the grid request returns Google's fast (blank)
-	// thumbnail and the real one is generated in the background. Only the
-	// single-item view (large size) generates synchronously.
-	pending := false // real thumbnail is being generated in the background
-	if display, kind, ok := s.thumbGenTarget(r, key); ok {
+	// gpix renders them locally (photos from the decrypted original, documents
+	// as a text image), every size from one decrypt, and caches them. A cache
+	// hit is served instantly. The grid never waits: it gets a placeholder while
+	// the item renders in the background. The single-item view renders now.
+	generated := false
+	if _, kind, ok := s.thumbGenTarget(r, key); ok {
+		generated = true
 		if data, ct, cached := s.cachedThumbFile(key, size, kind); cached {
 			writeThumb(w, data, ct)
 			return
 		}
-		if size >= 1024 { // single-item view: generate now
-			ctx, cancel := withTimeout(r.Context(), 90*time.Second)
-			data, ct, err := s.thumbBytes(ctx, key, display, size, kind)
-			cancel()
-			if err == nil {
-				writeThumb(w, data, ct)
+		if s.cfg.ThumbGen && !s.thumbRecentlyFailed(key) {
+			if size >= 1024 {
+				ctx, cancel := withTimeout(r.Context(), 90*time.Second)
+				data, ct, err := s.thumbBytes(ctx, key, size, kind)
+				cancel()
+				if err == nil {
+					writeThumb(w, data, ct)
+					return
+				}
+				if r.Context().Err() == nil {
+					s.thumbFailed.Store(key, time.Now())
+					s.logThumbFailure(key, err)
+				}
+			} else {
+				extra := 0
+				if !slices.Contains(thumbSizes, size) {
+					extra = size
+				}
+				s.queueThumb(thumbJob{key: key, kind: kind, extra: extra})
+				w.Header().Set("Content-Type", "image/gif")
+				w.Header().Set("Cache-Control", "no-store")
+				w.Header().Set("X-Thumb-Pending", "1")
+				_, _ = w.Write(pendingThumbGIF)
 				return
 			}
-		} else { // grid: never block — fill in the background
-			s.queueThumb(key, display, size, kind)
-			pending = true
 		}
 	}
 
@@ -93,12 +121,10 @@ func (s *Server) serveThumb(w http.ResponseWriter, r *http.Request, key string, 
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
-	if pending {
-		// The real (decrypted) thumbnail is generating in the background. Serve
-		// Google's blank placeholder only briefly and flag it, so the client can
-		// re-request and pick up the generated thumbnail without a manual reload.
-		w.Header().Set("Cache-Control", "private, max-age=3")
-		w.Header().Set("X-Thumb-Pending", "1")
+	if generated {
+		// gpix couldn't render this one (it failed recently); don't let Google's
+		// blank placeholder stick in caches.
+		w.Header().Set("Cache-Control", "private, max-age=60")
 	} else {
 		w.Header().Set("Cache-Control", "private, max-age=86400, immutable")
 	}

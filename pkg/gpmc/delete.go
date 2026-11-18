@@ -45,7 +45,7 @@ func (c *Client) DeleteByMediaKeys(ctx context.Context, mediaKeys []string, perm
 	found := make(map[string]string)
 	results := make(map[string]error, len(mediaKeys))
 	cursor := ""
-	for {
+	for pages := 0; pages < maxListPages; pages++ {
 		page, err := c.ListPage(ctx, cursor)
 		if err != nil {
 			return nil, err
@@ -59,7 +59,8 @@ func (c *Client) DeleteByMediaKeys(ctx context.Context, mediaKeys []string, perm
 				found[it.MediaKey] = it.DedupKey()
 			}
 		}
-		if len(found)+countErrors(results) >= len(mediaKeys) || page.NextToken == "" {
+		// An empty page means the (sync-token) listing has caught up.
+		if len(found)+countErrors(results) >= len(mediaKeys) || page.NextToken == "" || page.Raw == 0 {
 			break
 		}
 		cursor = page.NextToken

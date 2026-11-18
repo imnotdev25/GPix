@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
@@ -87,24 +88,28 @@ func (s *Server) handleLogtoCallback(w http.ResponseWriter, r *http.Request) {
 	email := ui.Email
 	name := firstNonEmpty(ui.Name, ui.Username, email, ui.Subject)
 
-	// Registration policy for first-time sign-ins.
+	// First-time sign-ins follow the same allowlist and account cap as
+	// password sign-up.
 	if s.users != nil {
-		if _, gerr := s.users.Get(ctx, ui.Subject); gerr != nil {
+		if _, gerr := s.users.Get(ctx, ui.Subject); errors.Is(gerr, users.ErrNotFound) {
 			if !users.Allowlisted(email, s.cfg.SignupAllowlist) {
 				s.loginError(w, "This account is not on the allowlist.")
 				return
 			}
-			if s.cfg.MaxUsers > 0 {
-				if n, _ := s.users.Count(ctx); n >= s.cfg.MaxUsers {
-					s.loginError(w, "Registration is closed (user limit reached).")
-					return
-				}
-			}
-			if cerr := s.users.Create(ctx, users.User{Subject: ui.Subject, Email: email, Name: name}); cerr != nil {
-				s.log.Error("logto create user", "err", cerr)
+			rerr := s.users.Register(ctx, users.User{Subject: ui.Subject, Email: email, Name: name}, s.cfg.MaxUsers)
+			switch {
+			case errors.Is(rerr, users.ErrClosed):
+				s.loginError(w, "Sign-up is closed: this server already has its maximum number of accounts.")
+				return
+			case rerr != nil && !errors.Is(rerr, users.ErrExists):
+				s.log.Error("logto create user", "err", rerr)
 				s.loginError(w, "Could not create your account.")
 				return
 			}
+		} else if gerr != nil {
+			s.log.Error("logto user lookup", "err", gerr)
+			s.loginError(w, "Could not read your account.")
+			return
 		}
 	}
 

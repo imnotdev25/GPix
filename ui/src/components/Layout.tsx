@@ -13,6 +13,7 @@ type NavItem = { to: string; label: string; icon: IconName };
 
 const primary: NavItem[] = [
   { to: "/library", label: "Library", icon: "photos" },
+  { to: "/albums", label: "Albums", icon: "album" },
   { to: "/upload", label: "Upload", icon: "upload" },
   { to: "/shares", label: "Shares", icon: "share" },
   { to: "/import", label: "Import", icon: "import" },
@@ -68,7 +69,14 @@ export default function Layout({
   const [more, setMore] = useState(false);
   const { pathname } = useLocation();
   // "/" also shows the library.
-  const isActive = (to: string) => pathname === to || (to === "/library" && pathname === "/");
+  // Album and tag pages count as Albums.
+  const isActive = (to: string) =>
+    pathname === to ||
+    (to === "/library" && pathname === "/") ||
+    (to === "/albums" && (pathname.startsWith("/albums/") || pathname.startsWith("/tags/")));
+  // The phone tab bar has room for four; the rest go in the More sheet.
+  const tabs = primary.slice(0, 4);
+  const overflow = [...primary.slice(4), ...settings];
 
   const signOut = async () => {
     await api.post("/api/v1/auth/logout").catch(() => {});
@@ -113,14 +121,14 @@ export default function Layout({
       <main className="main">{children}</main>
 
       <nav className="tabbar" aria-label="Main">
-        {primary.map((l) => (
+        {tabs.map((l) => (
           <NavLink key={l.to} to={l.to} className={"tab" + (isActive(l.to) ? " active" : "")}>
             <Icon name={l.icon} size={20} />
             <span>{l.label}</span>
           </NavLink>
         ))}
         <button
-          className={"tab" + (settings.some((s) => isActive(s.to)) ? " active" : "")}
+          className={"tab" + (overflow.some((s) => isActive(s.to)) ? " active" : "")}
           onClick={() => setMore(true)}
         >
           <Icon name="menu" size={20} />
@@ -131,7 +139,7 @@ export default function Layout({
       {more && (
         <Modal title="More" sheet onClose={() => setMore(false)}>
           <div className="more-list" onClick={() => setMore(false)}>
-            {settings.map(navLink)}
+            {overflow.map(navLink)}
           </div>
           <div className="field">
             <span>Theme</span>

@@ -7,13 +7,16 @@
 // The cache can be backed by a Store (see pkg/cachedb) that persists the last
 // snapshot to disk. With a Store, names are served instantly on startup from
 // the saved snapshot while a fresh listing loads in the background
-// (stale-while-revalidate).
+// (stale-while-revalidate). Uploads and deletes made through gpix are applied
+// to the cache right away (Add/Remove) instead of waiting for the next listing.
 package library
 
 import (
 	"context"
+	"log/slog"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gpix/pkg/gpmc"
@@ -25,6 +28,15 @@ type Store interface {
 	Save(items []gpmc.MediaItem) error
 }
 
+// How long an upload added with Add is kept while Google's listing doesn't
+// show it yet.
+const keepAdded = 10 * time.Minute
+
+type addedItem struct {
+	item gpmc.MediaItem
+	at   time.Time
+}
+
 // Cache holds the most recent full library listing with a TTL and optional
 // background refresh + persistence. It is safe for concurrent use.
 type Cache struct {
@@ -33,12 +45,34 @@ type Cache struct {
 	store Store
 
 	mu        sync.RWMutex
-	items     []gpmc.MediaItem // newest-first
+	items     []gpmc.MediaItem // newest-first; replaced, never modified in place
 	byKey     map[string]gpmc.MediaItem
 	fetchedAt time.Time
+	added     map[string]addedItem // uploads the listing doesn't show yet
+	unmerged  []gpmc.MediaItem     // added since items was last rebuilt
+	removed   map[string]time.Time // deleted through gpix, and when
 
 	flightMu sync.Mutex
 	flight   chan struct{} // non-nil while a refresh is in progress
+	lastErr  error         // result of the last finished refresh
+
+	log    *slog.Logger
+	listed atomic.Bool // a listing has succeeded in this process
+}
+
+// SetLogger sets where listings and their errors are reported. Call it before
+// Start; without it the cache logs nothing.
+func (c *Cache) SetLogger(l *slog.Logger) {
+	if l != nil {
+		c.log = l
+	}
+}
+
+func (c *Cache) logger() *slog.Logger {
+	if c.log == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return c.log
 }
 
 // New returns a cache with the given freshness TTL (defaults to 60s) and an
@@ -56,35 +90,66 @@ func New(gp *gpmc.Client, ttl time.Duration, store Store) *Cache {
 	}
 	if store != nil {
 		if items, savedAt, err := store.Load(); err == nil && len(items) > 0 {
-			c.set(items, savedAt)
+			c.set(items, savedAt, savedAt)
 		}
 	}
 	return c
 }
 
-func (c *Cache) set(items []gpmc.MediaItem, at time.Time) {
+// set installs a listing that was started at `started`. Uploads it doesn't show
+// yet are kept, and items deleted after it started are dropped. It returns the
+// installed slice.
+func (c *Cache) set(items []gpmc.MediaItem, at, started time.Time) []gpmc.MediaItem {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	listed := make(map[string]bool, len(items))
+	for _, it := range items {
+		listed[it.MediaKey] = true
+	}
+	for k, a := range c.added {
+		if listed[k] || time.Since(a.at) > keepAdded {
+			delete(c.added, k)
+			continue
+		}
+		items = append(items, a.item)
+	}
+	if len(c.removed) > 0 {
+		kept := make([]gpmc.MediaItem, 0, len(items))
+		for _, it := range items {
+			if t, gone := c.removed[it.MediaKey]; gone && t.After(started) {
+				continue // deleted after this listing began
+			}
+			kept = append(kept, it)
+		}
+		items = kept
+		for k, t := range c.removed {
+			if !t.After(started) {
+				delete(c.removed, k)
+			}
+		}
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Mtime.After(items[j].Mtime) })
 	byKey := make(map[string]gpmc.MediaItem, len(items))
 	for _, it := range items {
 		byKey[it.MediaKey] = it
 	}
-	sort.SliceStable(items, func(i, j int) bool { return items[i].Mtime.After(items[j].Mtime) })
-	c.mu.Lock()
 	c.items = items
 	c.byKey = byKey
+	c.unmerged = nil
 	c.fetchedAt = at
-	c.mu.Unlock()
+	return items
 }
 
 func (c *Cache) fresh() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return len(c.items) > 0 && time.Since(c.fetchedAt) < c.ttl
+	return len(c.items)+len(c.unmerged) > 0 && time.Since(c.fetchedAt) < c.ttl
 }
 
 func (c *Cache) hasData() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return len(c.items) > 0
+	return len(c.items)+len(c.unmerged) > 0
 }
 
 // ensure makes sure data is available. If fresh, returns immediately. If stale
@@ -95,66 +160,118 @@ func (c *Cache) ensure(ctx context.Context) error {
 		return nil
 	}
 	if c.hasData() {
-		c.refreshAsync()
+		c.startRefresh()
 		return nil
 	}
 	return c.refreshBlocking(ctx)
 }
 
-func (c *Cache) refreshAsync() {
+// startRefresh starts a full listing unless one is already running, and returns
+// a channel closed when it finishes. The listing isn't tied to any request, so
+// a client that gives up doesn't cancel it, and callers that arrive meanwhile
+// join it instead of starting another.
+func (c *Cache) startRefresh() <-chan struct{} {
 	c.flightMu.Lock()
+	defer c.flightMu.Unlock()
 	if c.flight != nil {
-		c.flightMu.Unlock()
-		return
+		return c.flight
 	}
 	ch := make(chan struct{})
 	c.flight = ch
-	c.flightMu.Unlock()
 	go func() {
-		_ = c.Refresh(context.Background())
+		err := c.Refresh(context.Background())
 		c.flightMu.Lock()
+		c.lastErr = err
 		c.flight = nil
 		close(ch)
 		c.flightMu.Unlock()
 	}()
+	return ch
 }
 
+// refreshBlocking waits (at most until ctx ends) for a full listing.
 func (c *Cache) refreshBlocking(ctx context.Context) error {
-	c.flightMu.Lock()
-	if c.flight != nil {
-		ch := c.flight
-		c.flightMu.Unlock()
-		select {
-		case <-ch:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	done := c.startRefresh()
+	select {
+	case <-done:
+		c.flightMu.Lock()
+		defer c.flightMu.Unlock()
+		return c.lastErr
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	ch := make(chan struct{})
-	c.flight = ch
-	c.flightMu.Unlock()
-
-	err := c.Refresh(ctx)
-
-	c.flightMu.Lock()
-	c.flight = nil
-	close(ch)
-	c.flightMu.Unlock()
-	return err
 }
 
 // Refresh unconditionally re-reads the entire library and persists it.
 func (c *Cache) Refresh(ctx context.Context) error {
-	items, err := c.gp.ListRecent(ctx, 0) // 0 = everything
+	log := c.logger()
+	started := time.Now()
+	before := c.count()
+	first := !c.listed.Load()
+	if first {
+		log.Info("library: listing from Google", "cached", before)
+	} else {
+		log.Debug("library: listing from Google")
+	}
+	lastLog := started
+	items, err := c.gp.ListAll(ctx, func(p gpmc.ListProgress) {
+		if p.Capped {
+			log.Warn("library: stopped listing at the page limit; the listing may be incomplete", "pages", p.Pages, "items", p.Items)
+			return
+		}
+		// A long first listing reports progress, so it's clear it isn't stuck.
+		if time.Since(lastLog) >= 15*time.Second {
+			lastLog = time.Now()
+			log.Info("library: still listing", "pages", p.Pages, "items", p.Items, "s", int(time.Since(started).Seconds()))
+		}
+	})
 	if err != nil {
+		log.Warn("library: listing failed", "err", err, "after_ms", time.Since(started).Milliseconds(), "serving_cached", before)
 		return err
 	}
-	c.set(items, time.Now())
+	items = c.set(items, time.Now(), started)
 	if c.store != nil {
-		_ = c.store.Save(items) // best-effort persistence
+		if serr := c.store.Save(items); serr != nil {
+			log.Warn("library: couldn't save the listing to disk", "err", serr)
+		}
 	}
+	c.listed.Store(true)
+	lvl := slog.LevelDebug
+	if first || len(items) != before {
+		lvl = slog.LevelInfo
+	}
+	log.Log(ctx, lvl, "library: listed", "items", len(items), "change", len(items)-before,
+		"ms", time.Since(started).Milliseconds())
 	return nil
+}
+
+func (c *Cache) count() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.items) + len(c.unmerged)
+}
+
+// snapshot returns the current listing, newest first, with recent uploads
+// merged in. Callers must not modify it.
+func (c *Cache) snapshot() []gpmc.MediaItem {
+	c.mu.RLock()
+	if len(c.unmerged) == 0 {
+		items := c.items
+		c.mu.RUnlock()
+		return items
+	}
+	c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.unmerged) > 0 {
+		merged := make([]gpmc.MediaItem, 0, len(c.items)+len(c.unmerged))
+		merged = append(merged, c.items...)
+		merged = append(merged, c.unmerged...)
+		sort.SliceStable(merged, func(i, j int) bool { return merged[i].Mtime.After(merged[j].Mtime) })
+		c.items = merged
+		c.unmerged = nil
+	}
+	return c.items
 }
 
 // All returns the cached library (refreshing if stale). The slice must not be
@@ -163,9 +280,62 @@ func (c *Cache) All(ctx context.Context) ([]gpmc.MediaItem, error) {
 	if err := c.ensure(ctx); err != nil {
 		return nil, err
 	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.items, nil
+	return c.snapshot(), nil
+}
+
+// Add records an item gpix just uploaded so it is listed immediately, before
+// Google's listing includes it.
+func (c *Cache) Add(it gpmc.MediaItem) {
+	if it.MediaKey == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.byKey[it.MediaKey]; ok {
+		return
+	}
+	if c.added == nil {
+		c.added = map[string]addedItem{}
+	}
+	c.added[it.MediaKey] = addedItem{item: it, at: time.Now()}
+	c.unmerged = append(c.unmerged, it)
+	c.byKey[it.MediaKey] = it
+}
+
+// Remove drops items gpix just deleted, so they disappear without waiting for
+// the next listing (and don't reappear from one that was already running).
+func (c *Cache) Remove(keys ...string) {
+	if len(keys) == 0 {
+		return
+	}
+	drop := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		drop[k] = true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	keep := func(list []gpmc.MediaItem) []gpmc.MediaItem {
+		out := make([]gpmc.MediaItem, 0, len(list))
+		for _, it := range list {
+			if !drop[it.MediaKey] {
+				out = append(out, it)
+			}
+		}
+		return out
+	}
+	c.items = keep(c.items)
+	if len(c.unmerged) > 0 {
+		c.unmerged = keep(c.unmerged)
+	}
+	if c.removed == nil {
+		c.removed = map[string]time.Time{}
+	}
+	now := time.Now()
+	for k := range drop {
+		delete(c.byKey, k)
+		delete(c.added, k)
+		c.removed[k] = now
+	}
 }
 
 // Get looks up a single item by media key (refreshing if stale).
@@ -222,13 +392,14 @@ func (c *Cache) Invalidate() {
 }
 
 // Start runs a background refresh loop until ctx is cancelled, keeping the cache
-// warm. interval defaults to the TTL.
+// warm. interval defaults to the TTL. A tick is skipped while the previous
+// listing is still running.
 func (c *Cache) Start(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		interval = c.ttl
 	}
 	go func() {
-		_ = c.Refresh(ctx)
+		done := c.startRefresh()
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
@@ -236,7 +407,11 @@ func (c *Cache) Start(ctx context.Context, interval time.Duration) {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				_ = c.Refresh(ctx)
+				select {
+				case <-done:
+					done = c.startRefresh()
+				default:
+				}
 			}
 		}
 	}()

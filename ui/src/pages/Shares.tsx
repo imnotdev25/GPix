@@ -136,6 +136,16 @@ export default function Shares() {
                           <Icon name="copy" size={14} />
                           Copy
                         </button>
+                        {s.directUrl && (
+                          <button
+                            className="btn btn-sm"
+                            onClick={() => copy(s.directUrl!)}
+                            title="Copy a link that starts the download directly"
+                          >
+                            <Icon name="download" size={14} />
+                            Direct
+                          </button>
+                        )}
                         <a
                           className="btn btn-sm btn-icon"
                           href={s.url}

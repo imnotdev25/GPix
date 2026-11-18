@@ -20,13 +20,13 @@ const (
 )
 
 type MediaItem struct {
-	MediaKey   string
-	Filename   string
-	Kind       MediaKind
-	SizeBytes  int64
-	Mtime      time.Time
-	SHA1       []byte
-	ThumbURL   string
+	MediaKey    string
+	Filename    string
+	Kind        MediaKind
+	SizeBytes   int64
+	Mtime       time.Time
+	SHA1        []byte
+	ThumbURL    string
 	DownloadURL string
 }
 
@@ -42,6 +42,9 @@ func (m MediaItem) DedupKey() string {
 type PageResult struct {
 	Items     []MediaItem
 	NextToken string
+	// Raw is how many items Google returned, including trashed ones that
+	// Items leaves out. Zero means the listing has caught up.
+	Raw int
 }
 
 func (c *Client) ListPage(ctx context.Context, resumeToken string) (PageResult, error) {
@@ -60,24 +63,60 @@ func (c *Client) ListPage(ctx context.Context, resumeToken string) (PageResult, 
 		return PageResult{}, fmt.Errorf("gpmc list-page: decode: %w", err)
 	}
 
-	items := decodeMediaItems(resp.GetBody().GetItems())
+	raw := resp.GetBody().GetItems()
+	items := decodeMediaItems(raw)
 	next := resp.GetBody().GetSyncToken()
 	if next == resumeToken {
 		next = ""
 	}
-	return PageResult{Items: items, NextToken: next}, nil
+	return PageResult{Items: items, NextToken: next, Raw: len(raw)}, nil
+}
+
+// maxListPages bounds a full listing in case Google keeps handing out tokens.
+const maxListPages = 20000
+
+// ListProgress reports how far a full listing has got, after each page.
+type ListProgress struct {
+	Pages  int
+	Items  int
+	Capped bool // stopped at maxListPages rather than at the end
 }
 
 func (c *Client) ListRecent(ctx context.Context, n int) ([]MediaItem, error) {
+	return c.list(ctx, n, nil)
+}
+
+// ListAll lists the whole library, calling progress (if set) after each page.
+func (c *Client) ListAll(ctx context.Context, progress func(ListProgress)) ([]MediaItem, error) {
+	return c.list(ctx, 0, progress)
+}
+
+func (c *Client) list(ctx context.Context, n int, progress func(ListProgress)) ([]MediaItem, error) {
 	all := []MediaItem{}
+	seen := map[string]bool{}
 	cursor := ""
-	for {
+	for pages := 0; pages < maxListPages; pages++ {
 		page, err := c.ListPage(ctx, cursor)
 		if err != nil {
 			return nil, err
 		}
-		all = append(all, page.Items...)
-		if page.NextToken == "" || (n > 0 && len(all) >= n*2) {
+		added := 0
+		for _, it := range page.Items {
+			if !seen[it.MediaKey] {
+				seen[it.MediaKey] = true
+				all = append(all, it)
+				added++
+			}
+		}
+		// The token is a sync token: once the listing has caught up, Google
+		// returns empty pages with a fresh token forever. Stop at the first
+		// page that brings nothing, or only items we already have.
+		done := page.NextToken == "" || page.Raw == 0 || (added == 0 && len(page.Items) > 0) ||
+			(n > 0 && len(all) >= n*2)
+		if progress != nil {
+			progress(ListProgress{Pages: pages + 1, Items: len(all), Capped: !done && pages+1 == maxListPages})
+		}
+		if done {
 			break
 		}
 		cursor = page.NextToken

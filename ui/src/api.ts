@@ -50,7 +50,11 @@ export function uploadFiles(
   return new Promise((resolve, reject) => {
     const form = new FormData();
     form.append("quality", quality);
-    for (const f of files) form.append("files", f, f.name);
+    for (const f of files) {
+      // The file's own date, used when it has no capture date inside (EXIF etc.).
+      if (f.lastModified) form.append("mtime", String(f.lastModified));
+      form.append("files", f, f.name);
+    }
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/v1/upload");

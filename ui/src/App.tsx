@@ -12,6 +12,7 @@ import Import from "./pages/Import";
 import Connections from "./pages/Connections";
 import Tokens from "./pages/Tokens";
 import Accounts from "./pages/Accounts";
+import Albums, { AlbumPage, TagPage } from "./pages/Albums";
 
 export default function App() {
   const [me, setMe] = useState<Me | null>(null);
@@ -43,7 +44,7 @@ export default function App() {
   if (!me.signedIn) {
     return (
       <Routes>
-        <Route path="/" element={<Landing />} />
+        <Route path="/" element={<Landing setup={!!me.firstRun && !!me.signupOpen} />} />
         <Route path="/signin" element={<Login me={me} onSignedIn={refresh} />} />
         <Route path="*" element={<Navigate to="/signin" replace state={{ from: location.pathname }} />} />
       </Routes>
@@ -59,11 +60,15 @@ export default function App() {
       onSignedOut={() => {
         setMe({ ...me, user: "", signedIn: false });
         navigate("/", { replace: true });
+        refresh(); // picks up whether sign-up is open now
       }}
     >
       <Routes>
         <Route path="/" element={<Library />} />
         <Route path="/library" element={<Library />} />
+        <Route path="/albums" element={<Albums />} />
+        <Route path="/albums/:id" element={<AlbumPage />} />
+        <Route path="/tags/:tag" element={<TagPage />} />
         <Route path="/upload" element={<Upload />} />
         <Route path="/shares" element={<Shares />} />
         <Route path="/import" element={<Import />} />

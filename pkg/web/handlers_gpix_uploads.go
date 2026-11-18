@@ -169,7 +169,7 @@ func (s *Server) apiGpixUploadsDelete(w http.ResponseWriter, r *http.Request) {
 			s.log.Warn("upload log: forget deleted items", "err", ferr)
 		}
 	}
-	rt.Lib.Invalidate()
+	rt.Lib.Remove(deleted...)
 	s.log.Warn("delete-gpix-uploads executed",
 		"user", userFromCtx(r.Context()), "account", rt.Label,
 		"total", sum.Total, "deleted", len(deleted), "failed", failed)

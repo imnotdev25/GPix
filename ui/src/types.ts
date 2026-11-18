@@ -7,11 +7,16 @@ export interface MediaItem {
   mtime: string;
   thumb: string;
   original: string;
+  thumbPending?: boolean;
+  tags?: string[];
 }
 
 export interface MediaPage {
   items: MediaItem[] | null;
   nextCursor: string;
+  prevCursor?: string;
+  offset?: number;
+  total?: number;
 }
 
 export interface Me {
@@ -19,6 +24,10 @@ export interface Me {
   signedIn: boolean;
   passwordLogin: boolean;
   logtoEnabled: boolean;
+  /** A new account can be created now (GPIX_MAX_USERS not reached). */
+  signupOpen?: boolean;
+  /** No account exists yet: the first sign-up owns the server. */
+  firstRun?: boolean;
 }
 
 export interface Account {
@@ -39,6 +48,8 @@ export interface Share {
   allowOriginal: boolean;
   createdAt: string;
   count: number;
+  /** Starts the download directly (a .zip for several items). */
+  directUrl?: string;
 }
 
 export interface ImportProgress {
@@ -98,4 +109,24 @@ export interface GpixUploadSummary {
   trackingEnabled: boolean;
   trackingSince: string;
   sample: string[];
+}
+
+/** A gpix album (stored by gpix, not synced with Google Photos). */
+export interface Album {
+  id: number;
+  name: string;
+  count: number;
+  cover?: MediaItem;
+  createdAt: string;
+}
+
+export interface TagSummary {
+  tag: string;
+  count: number;
+}
+
+export interface TimelineMonth {
+  year: number;
+  month: number; // 1-12
+  count: number;
 }

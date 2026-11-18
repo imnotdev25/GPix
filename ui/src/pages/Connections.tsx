@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import * as api from "../api";
 import type { Gateways } from "../types";
 import PurgeGpixUploads from "../components/PurgeGpixUploads";
+import S3Card from "../components/S3Card";
 import { errMsg, useConfirm, useToast } from "../components/feedback";
 
 export default function Connections() {
@@ -114,43 +115,7 @@ export default function Connections() {
         </div>
       )}
 
-      <div className="card">
-        <div className="row">
-          <h2 style={{ margin: 0 }}>S3</h2>
-          <div className="spacer" />
-          <span className="muted">{g.S3Enabled ? g.S3Endpoint : "disabled"}</span>
-        </div>
-        {g.HasS3Keys ? (
-          <>
-            <label className="field">
-              <span>Access key</span>
-              <input className="input" readOnly value={g.S3AccessKey} />
-            </label>
-            <label className="field">
-              <span>Secret key</span>
-              <input className="input" readOnly value={g.S3SecretKey} />
-            </label>
-          </>
-        ) : (
-          <p className="muted">No keys yet — generate a pair to connect an S3 client.</p>
-        )}
-        <div className="row">
-          <button
-            className="btn btn-primary"
-            onClick={() => act("/api/v1/gateways/regenerate", { kind: "s3" }, "New S3 keys generated — copy them now.")}
-          >
-            {g.HasS3Keys ? "Regenerate" : "Generate"} keys
-          </button>
-          {g.HasS3Keys && (
-            <button
-              className="btn"
-              onClick={() => act("/api/v1/gateways/clear", { kind: "s3" }, "S3 keys cleared.")}
-            >
-              Clear
-            </button>
-          )}
-        </div>
-      </div>
+      <S3Card g={g} act={act} />
 
       <div className="card">
         <div className="row">

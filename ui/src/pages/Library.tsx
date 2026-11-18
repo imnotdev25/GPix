@@ -1,16 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent, PointerEvent as RPointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent, PointerEvent as RPointerEvent, ReactNode } from "react";
 import { Link } from "react-router-dom";
 import * as api from "../api";
-import type { MediaItem, MediaPage } from "../types";
+import type { MediaItem, MediaPage, TimelineMonth } from "../types";
 import Thumb from "../components/Thumb";
 import Icon from "../components/Icon";
 import ShareDialog from "../components/ShareDialog";
+import TimelineRail from "../components/TimelineRail";
+import { AddToAlbumDialog, TagDialog } from "../components/CollectionDialogs";
 import { errMsg, useConfirm, useToast } from "../components/feedback";
 import { parseDate } from "../format";
 import Viewer from "./Viewer";
 
 type Day = { key: string; label: string; start: number; end: number };
+type Mode = "reset" | "more" | "newer";
+export type LibraryFilter = { album?: number; tag?: string };
 
 function dayKey(d: Date | null): string {
   return d ? `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}` : "unknown";
@@ -45,70 +49,211 @@ function groupDays(items: MediaItem[]): Day[] {
 
 const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
 
-export default function Library() {
+/** The photo grid. Also used, with a filter, for an album or a tag. */
+export default function Library({
+  filter,
+  title = "Library",
+  back,
+  actions,
+  empty,
+}: {
+  filter?: LibraryFilter;
+  title?: string;
+  back?: { to: string; label: string };
+  actions?: ReactNode;
+  empty?: ReactNode;
+}) {
+  const fq = filter?.album ? `album=${filter.album}` : filter?.tag ? `tag=${encodeURIComponent(filter.tag)}` : "";
+
   const [items, setItems] = useState<MediaItem[]>([]);
   const [cursor, setCursor] = useState("");
+  const [prevCursor, setPrevCursor] = useState("");
+  const [offset, setOffset] = useState(0);
+  const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [warming, setWarming] = useState(false);
   const [error, setError] = useState("");
+  const [months, setMonths] = useState<TimelineMonth[]>([]);
+  const [topIndex, setTopIndex] = useState(0);
   const [viewing, setViewing] = useState<number | null>(null);
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sharing, setSharing] = useState<string[] | null>(null);
+  const [albumFor, setAlbumFor] = useState<string[] | null>(null);
+  const [tagFor, setTagFor] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [focusIdx, setFocusIdx] = useState(0);
   const press = useRef<{ timer: number; x: number; y: number; fired: boolean } | null>(null);
   const sentinel = useRef<HTMLDivElement | null>(null);
   const loadingRef = useRef(false);
   const lastIndex = useRef<number | null>(null);
+  const retryTimer = useRef(0);
+  const anchor = useRef<{ key: string; top: number } | null>(null);
   const ask = useConfirm();
   const toast = useToast();
 
-  const load = useCallback(
-    async (reset = false) => {
-      if (loadingRef.current) return;
-      loadingRef.current = true;
-      setLoading(true);
-      try {
-        const c = reset ? "" : cursor;
-        const page = await api.get<MediaPage>(
-          "/api/v1/media" + (c ? `?cursor=${encodeURIComponent(c)}` : ""),
-        );
-        const got = page.items ?? [];
-        setItems((prev) => (reset ? got : [...prev, ...got]));
+  const loadTimeline = () => {
+    const q = new URLSearchParams(fq);
+    try {
+      q.set("tz", Intl.DateTimeFormat().resolvedOptions().timeZone);
+    } catch {
+      /* no Intl time zone: the server groups by UTC */
+    }
+    api
+      .get<{ months: TimelineMonth[] }>(`/api/v1/media/timeline?${q}`)
+      .then((r) => setMonths(r.months ?? []))
+      .catch(() => {});
+  };
+
+  // reset: the first page (or the page starting at `from`); more: the next
+  // page down; newer: the page above, after jumping to an older month.
+  const fetchPage = async (mode: Mode, from?: number): Promise<boolean> => {
+    if (loadingRef.current) return false;
+    loadingRef.current = true;
+    setLoading(true);
+    const q = new URLSearchParams(fq);
+    q.set("limit", "50");
+    if (mode === "more" && cursor) q.set("cursor", cursor);
+    if (mode === "newer") {
+      q.set("before", prevCursor);
+      const first = document.querySelector<HTMLElement>('.tile[data-index="0"]');
+      if (first) anchor.current = { key: first.dataset.key ?? "", top: first.getBoundingClientRect().top };
+    }
+    if (mode === "reset" && from) q.set("from", String(from));
+    try {
+      const page = await api.get<MediaPage>(`/api/v1/media?${q}`);
+      const got = page.items ?? [];
+      setWarming(false);
+      setError("");
+      setTotal(page.total ?? 0);
+      if (mode === "reset") {
+        setItems(got);
+        setOffset(page.offset ?? 0);
+        setPrevCursor(page.prevCursor ?? "");
         setCursor(page.nextCursor);
         setHasMore(!!page.nextCursor);
-        setError("");
-      } catch (err) {
-        setError(errMsg(err));
-      } finally {
-        loadingRef.current = false;
-        setLoading(false);
-        setLoaded(true);
+        loadTimeline();
+      } else if (mode === "more") {
+        setItems((prev) => {
+          const seen = new Set(prev.map((i) => i.key));
+          return [...prev, ...got.filter((i) => !seen.has(i.key))];
+        });
+        setCursor(page.nextCursor);
+        // Stop when the server says so, or when a page brings nothing: an
+        // endless "next page" is what made a small library flicker.
+        setHasMore(!!page.nextCursor && got.length > 0);
+      } else {
+        setItems((prev) => {
+          const seen = new Set(prev.map((i) => i.key));
+          return [...got.filter((i) => !seen.has(i.key)), ...prev];
+        });
+        setOffset(page.offset ?? 0);
+        setPrevCursor(page.prevCursor ?? "");
       }
-    },
-    [cursor],
-  );
+      return true;
+    } catch (err) {
+      anchor.current = null;
+      if (err instanceof api.ApiError && err.status === 503) {
+        // The server's first full listing is still running: try again shortly.
+        setWarming(true);
+        window.clearTimeout(retryTimer.current);
+        retryTimer.current = window.setTimeout(() => fetchRef.current(mode, from), 4000);
+      } else {
+        setError(errMsg(err));
+        if (mode === "more") setHasMore(false);
+      }
+      return false;
+    } finally {
+      loadingRef.current = false;
+      setLoading(false);
+      setLoaded(true);
+    }
+  };
+  const fetchRef = useRef(fetchPage);
+  fetchRef.current = fetchPage;
 
   useEffect(() => {
-    load(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    fetchRef.current("reset");
+    return () => window.clearTimeout(retryTimer.current);
   }, []);
 
-  // Infinite scroll.
+  // Infinite scroll, a page of 50 at a time.
+  const n = items.length;
   useEffect(() => {
     const el = sentinel.current;
-    if (!el || !hasMore) return;
+    if (!el || !hasMore || !loaded || n === 0) return;
     const io = new IntersectionObserver(
       (e) => {
-        if (e[0].isIntersecting) load();
+        if (e[0].isIntersecting) fetchRef.current("more");
       },
       { rootMargin: "800px 0px" },
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [hasMore, load]);
+  }, [hasMore, loaded, cursor, n > 0]);
+
+  // Keep the view still when newer photos are added above it.
+  useLayoutEffect(() => {
+    const a = anchor.current;
+    if (!a) return;
+    anchor.current = null;
+    const el = document.querySelector<HTMLElement>(`.tile[data-key="${CSS.escape(a.key)}"]`);
+    if (el) window.scrollBy(0, el.getBoundingClientRect().top - a.top);
+  }, [items]);
+
+  // Which photo is at the top of the screen (for the date scrubber).
+  useEffect(() => {
+    let raf = 0;
+    const measure = () => {
+      raf = 0;
+      const grid = document.querySelector<HTMLElement>(".day .grid");
+      if (!grid) return;
+      const x = grid.getBoundingClientRect().left + 8;
+      const y = window.innerWidth <= 820 ? 110 : 80; // below the sticky bars
+      const el = document.elementFromPoint(x, y)?.closest<HTMLElement>(".tile[data-index]");
+      if (el) setTopIndex(Number(el.dataset.index));
+      else if (window.scrollY < 40) setTopIndex(0);
+    };
+    const onScroll = () => {
+      if (!raf) raf = requestAnimationFrame(measure);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      cancelAnimationFrame(raf);
+    };
+  }, []);
+
+  const scrollToIndex = (i: number) => {
+    const tile = document.querySelector<HTMLElement>(`.tile[data-index="${i}"]`);
+    if (!tile) return;
+    const day = tile.closest<HTMLElement>(".day");
+    const target = day && day.querySelector(".tile[data-index]") === tile ? day : tile;
+    target.scrollIntoView({ block: "start" });
+  };
+
+  // Scrubber: jump to a month, using what's loaded when it covers that month.
+  const jumpToMonth = (m: TimelineMonth) => {
+    const from = new Date(m.year, m.month, 1).getTime(); // first moment after that month (local time)
+    const newest = n ? parseDate(items[0].mtime) : null;
+    const covered = n > 0 && (offset === 0 || (newest !== null && newest.getTime() >= from));
+    if (covered) {
+      const i = items.findIndex((it) => (parseDate(it.mtime)?.getTime() ?? 0) < from);
+      if (i >= 0) {
+        scrollToIndex(i);
+        return;
+      }
+      if (!hasMore) {
+        scrollToIndex(n - 1);
+        return;
+      }
+    }
+    fetchRef.current("reset", from).then((ok) => {
+      if (ok) window.scrollTo({ top: 0 });
+    });
+  };
 
   const days = useMemo(() => groupDays(items), [items]);
   const selecting = selectMode || selected.size > 0;
@@ -117,6 +262,12 @@ export default function Library() {
     setSelected(new Set());
     setSelectMode(false);
     lastIndex.current = null;
+  };
+
+  const refresh = () => {
+    clearSelection();
+    setHasMore(true);
+    fetchRef.current("reset");
   };
 
   // Shift-click selects everything between the last clicked tile and this one.
@@ -242,16 +393,13 @@ export default function Library() {
     if (!ok) return;
     setBusy(true);
     try {
-      const res = await api.post<{ deleted: string[]; failed: number }>("/api/v1/media/delete", {
-        keys,
-      });
+      const res = await api.post<{ deleted: string[]; failed: number }>("/api/v1/media/delete", { keys });
       const gone = new Set(res.deleted);
       setItems((prev) => prev.filter((it) => !gone.has(it.key)));
+      setTotal((t) => Math.max(0, t - gone.size));
       clearSelection();
       toast(
-        res.failed
-          ? `Moved ${gone.size} to trash; ${res.failed} failed`
-          : `Moved ${plural(gone.size, "item")} to trash`,
+        res.failed ? `Moved ${gone.size} to trash; ${res.failed} failed` : `Moved ${plural(gone.size, "item")} to trash`,
         res.failed ? "err" : "ok",
       );
     } catch (err) {
@@ -261,10 +409,28 @@ export default function Library() {
     }
   };
 
+  const removeFromAlbum = async () => {
+    if (!filter?.album) return;
+    const keys = [...selected];
+    try {
+      await api.post(`/api/v1/albums/${filter.album}/items/remove`, { keys });
+      const gone = new Set(keys);
+      setItems((prev) => prev.filter((it) => !gone.has(it.key)));
+      setTotal((t) => Math.max(0, t - keys.length));
+      clearSelection();
+      toast(`Removed ${plural(keys.length, "item")} from the album`, "ok");
+    } catch (err) {
+      toast("Couldn't remove them: " + errMsg(err), "err");
+    }
+  };
+
+  const applyTags = (next: Record<string, string[]>) =>
+    setItems((prev) => prev.map((it) => (it.key in next ? { ...it, tags: next[it.key] } : it)));
+
   const downloadSelected = () => {
     const list = items.filter((it) => selected.has(it.key));
     // Staggered so browsers don't drop the later downloads.
-    list.forEach((it, n) =>
+    list.forEach((it, j) =>
       window.setTimeout(() => {
         const a = document.createElement("a");
         a.href = api.originalUrl(it.key, true);
@@ -272,7 +438,7 @@ export default function Library() {
         document.body.appendChild(a);
         a.click();
         a.remove();
-      }, n * 400),
+      }, j * 400),
     );
     toast(
       list.length > 1
@@ -285,28 +451,45 @@ export default function Library() {
     const idx = items.findIndex((it) => it.key === key);
     const next = items.filter((it) => it.key !== key);
     setItems(next);
+    setTotal((t) => Math.max(0, t - 1));
     if (!next.length) setViewing(null);
     else setViewing(Math.min(Math.max(idx, 0), next.length - 1));
   };
 
-  const n = items.length;
+  const count = total || n;
+  const showRail = months.length > 1 && total > 0;
+  const railPos = total > 0 ? (offset + topIndex) / total : 0;
+  const showSkeleton = !loaded || (warming && n === 0);
 
   return (
-    <>
+    <div className={showRail ? "library with-rail" : "library"}>
       <div className="page-head row">
         <div>
-          <h1>Library</h1>
+          {back && (
+            <Link className="back-link" to={back.to}>
+              <Icon name="chevronLeft" size={14} />
+              {back.label}
+            </Link>
+          )}
+          <h1>{title}</h1>
           <p className="sub num">
-            {n > 0
-              ? `${plural(n, "item")} loaded${hasMore ? " · scroll for more" : ""}`
-              : "Photos, videos and documents on this server"}
+            {!loaded || warming
+              ? " "
+              : count > 0
+                ? plural(count, "item")
+                : filter
+                  ? "No items yet"
+                  : "Photos, videos and documents on this server"}
           </p>
         </div>
         <div className="spacer" />
-        <Link className="btn" to="/upload" aria-label="Upload">
-          <Icon name="upload" size={16} />
-          <span className="hide-sm">Upload</span>
-        </Link>
+        {actions}
+        {!filter && (
+          <Link className="btn" to="/upload" aria-label="Upload">
+            <Icon name="upload" size={16} />
+            <span className="hide-sm">Upload</span>
+          </Link>
+        )}
         <button
           className={"btn" + (selecting ? " on" : "")}
           onClick={() => (selecting ? clearSelection() : setSelectMode(true))}
@@ -316,31 +499,35 @@ export default function Library() {
           <Icon name="select" size={16} />
           <span className="hide-sm">{selecting ? "Done" : "Select"}</span>
         </button>
-        <button
-          className="btn btn-icon"
-          onClick={() => {
-            clearSelection();
-            load(true);
-          }}
-          disabled={loading}
-          aria-label="Refresh"
-          title="Refresh"
-        >
+        <button className="btn btn-icon" onClick={refresh} disabled={loading} aria-label="Refresh" title="Refresh">
           <Icon name="refresh" size={16} />
         </button>
       </div>
+
+      {warming && (
+        <div className="banner banner-info">
+          <div className="spinner" />
+          <span>Loading your library for the first time. This can take a minute for a large library.</span>
+        </div>
+      )}
 
       {error && (
         <div className="banner banner-err row">
           <span>{error}</span>
           <div className="spacer" />
-          <button className="btn btn-sm" onClick={() => load(n === 0)}>
+          <button
+            className="btn btn-sm"
+            onClick={() => {
+              setHasMore(true);
+              fetchRef.current(n === 0 ? "reset" : "more");
+            }}
+          >
             Retry
           </button>
         </div>
       )}
 
-      {!loaded && (
+      {showSkeleton && (
         <div className="grid" aria-hidden="true">
           {Array.from({ length: 12 }, (_, i) => (
             <div key={i} className="tile skeleton" />
@@ -348,23 +535,31 @@ export default function Library() {
         </div>
       )}
 
-      {loaded && n === 0 && !error && !loading && (
-        <div className="empty">
-          <Icon name="photos" size={40} />
-          <h2>No photos yet</h2>
-          <p className="muted">Upload photos, videos or any other file to get started.</p>
-          <Link className="btn btn-primary" to="/upload">
-            <Icon name="upload" size={16} />
-            Upload
-          </Link>
-        </div>
+      {loaded && !warming && n === 0 && !error && !loading &&
+        (empty ?? (
+          <div className="empty">
+            <Icon name="photos" size={40} />
+            <h2>No photos yet</h2>
+            <p className="muted">Upload photos, videos or any other file to get started.</p>
+            <Link className="btn btn-primary" to="/upload">
+              <Icon name="upload" size={16} />
+              Upload
+            </Link>
+          </div>
+        ))}
+
+      {offset > 0 && n > 0 && (
+        <button className="btn newer" onClick={() => fetchRef.current("newer")} disabled={loading}>
+          <Icon name="chevronLeft" size={16} />
+          Show newer photos
+        </button>
       )}
 
       {days.map((day) => {
         const dayItems = items.slice(day.start, day.end);
         const allOn = dayItems.every((it) => selected.has(it.key));
         return (
-          <section className={"day" + (selecting ? " selecting" : "")} key={`${day.key}-${day.start}`}>
+          <section className={"day" + (selecting ? " selecting" : "")} key={day.key}>
             <div className="day-head">
               <button
                 className={"day-check" + (selecting && allOn ? " on" : "")}
@@ -384,12 +579,9 @@ export default function Library() {
                 const named = it.class === "doc" || it.class === "file";
                 return (
                   <div
-                    key={it.key + i}
+                    key={it.key}
                     className={
-                      "tile" +
-                      (on ? " selected" : "") +
-                      (selecting ? " selecting" : "") +
-                      (named ? " named" : "")
+                      "tile" + (on ? " selected" : "") + (selecting ? " selecting" : "") + (named ? " named" : "")
                     }
                     role="button"
                     data-key={it.key}
@@ -411,9 +603,7 @@ export default function Library() {
                         e.preventDefault();
                         if (selecting) toggleAt(i, e.shiftKey);
                         else setViewing(i);
-                      } else if (
-                        ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)
-                      ) {
+                      } else if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) {
                         e.preventDefault();
                         moveFocus(i, e.key);
                       }
@@ -455,49 +645,46 @@ export default function Library() {
       <div ref={sentinel} style={{ height: 1 }} />
       {loaded &&
         loading &&
-        (n > 0 ? (
+        n > 0 && (
           <div className="grid grid-more" aria-hidden="true">
             {Array.from({ length: 6 }, (_, i) => (
               <div key={i} className="tile skeleton" />
             ))}
           </div>
-        ) : (
-          <div className="center" style={{ minHeight: 90 }}>
-            <div className="spinner" />
-          </div>
-        ))}
+        )}
+
+      {showRail && <TimelineRail months={months} total={total} position={railPos} onJump={jumpToMonth} />}
 
       {selecting && (
         <div className="selbar" role="toolbar" aria-label="Selection">
           <button className="btn btn-ghost btn-icon" onClick={clearSelection} aria-label="Clear selection">
             <Icon name="x" />
           </button>
-          <strong>{selected.size} selected</strong>
+          <strong className="num">{selected.size} selected</strong>
           <div className="spacer" />
-          <button
-            className="btn btn-ghost"
-            disabled={!selected.size}
-            onClick={() => setSharing([...selected])}
-            aria-label="Share"
-          >
+          <button className="btn btn-ghost" disabled={!selected.size} onClick={() => setSharing([...selected])} aria-label="Share">
             <Icon name="share" size={16} />
             <span className="hide-sm">Share</span>
           </button>
-          <button
-            className="btn btn-ghost"
-            disabled={!selected.size}
-            onClick={downloadSelected}
-            aria-label="Download"
-          >
+          <button className="btn btn-ghost" disabled={!selected.size} onClick={() => setAlbumFor([...selected])} aria-label="Add to album">
+            <Icon name="album" size={16} />
+            <span className="hide-sm">Album</span>
+          </button>
+          <button className="btn btn-ghost" disabled={!selected.size} onClick={() => setTagFor([...selected])} aria-label="Tag">
+            <Icon name="tag" size={16} />
+            <span className="hide-sm">Tag</span>
+          </button>
+          {filter?.album && (
+            <button className="btn btn-ghost" disabled={!selected.size} onClick={removeFromAlbum} aria-label="Remove from album">
+              <Icon name="x" size={16} />
+              <span className="hide-sm">Remove</span>
+            </button>
+          )}
+          <button className="btn btn-ghost" disabled={!selected.size} onClick={downloadSelected} aria-label="Download">
             <Icon name="download" size={16} />
             <span className="hide-sm">Download</span>
           </button>
-          <button
-            className="btn btn-danger"
-            disabled={!selected.size || busy}
-            onClick={deleteSelected}
-            aria-label="Move to trash"
-          >
+          <button className="btn btn-danger" disabled={!selected.size || busy} onClick={deleteSelected} aria-label="Move to trash">
             <Icon name="trash" size={16} />
             <span className="hide-sm">{busy ? "Deleting…" : "Delete"}</span>
           </button>
@@ -508,12 +695,22 @@ export default function Library() {
         <ShareDialog
           keys={sharing}
           defaultTitle={
-            sharing.length === 1
-              ? (items.find((it) => it.key === sharing[0])?.name ?? "")
-              : `${sharing.length} items`
+            sharing.length === 1 ? (items.find((it) => it.key === sharing[0])?.name ?? "") : `${sharing.length} items`
           }
           onClose={() => setSharing(null)}
           onCreated={clearSelection}
+        />
+      )}
+      {albumFor && <AddToAlbumDialog keys={albumFor} onClose={() => setAlbumFor(null)} onDone={clearSelection} />}
+      {tagFor && (
+        <TagDialog
+          keys={tagFor}
+          initial={tagFor.length === 1 ? (items.find((it) => it.key === tagFor[0])?.tags ?? []) : undefined}
+          onClose={() => setTagFor(null)}
+          onDone={(t) => {
+            applyTags(t);
+            if (tagFor.length > 1) clearSelection();
+          }}
         />
       )}
 
@@ -524,8 +721,9 @@ export default function Library() {
           onClose={() => setViewing(null)}
           onIndex={setViewing}
           onDeleted={onViewerDeleted}
+          onTagsChanged={(key, tags) => applyTags({ [key]: tags })}
         />
       )}
-    </>
+    </div>
   );
 }

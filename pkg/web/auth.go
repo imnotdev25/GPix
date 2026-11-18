@@ -3,9 +3,8 @@ package web
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
 const sessionCookieName = "gpix_session"
@@ -19,19 +18,20 @@ func userFromCtx(ctx context.Context) string {
 	return v
 }
 
+// handleLoginForm: the web app owns sign-in at /signin now, so the old
+// server-rendered page just redirects there.
 func (s *Server) handleLoginForm(w http.ResponseWriter, r *http.Request) {
-	if _, err := r.Cookie(sessionCookieName); err == nil {
-		if c, _ := r.Cookie(sessionCookieName); c != nil {
-			if _, err := s.verifySession(c.Value); err == nil {
-				http.Redirect(w, r, "/browse", http.StatusSeeOther)
-				return
-			}
+	if c, err := r.Cookie(sessionCookieName); err == nil {
+		if _, verr := s.verifySession(c.Value); verr == nil {
+			http.Redirect(w, r, "/library", http.StatusSeeOther)
+			return
 		}
 	}
-	s.renderLogin(w, "")
+	http.Redirect(w, r, "/signin", http.StatusSeeOther)
 }
 
-// renderLogin renders the login page with the current auth options.
+// renderLogin renders the legacy login page (still used for single sign-on
+// errors).
 func (s *Server) renderLogin(w http.ResponseWriter, errMsg string) {
 	s.render(w, "login", pageData{
 		Error:         errMsg,
@@ -40,41 +40,32 @@ func (s *Server) renderLogin(w http.ResponseWriter, errMsg string) {
 	})
 }
 
+// handleLoginSubmit keeps the legacy form POST (fields u, p) working.
 func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
-	if !s.cfg.PasswordLoginEnabled() {
-		s.renderLogin(w, "Password login is disabled. Use the single sign-on option.")
+	if !s.cfg.PasswordLoginEnabled() || s.users == nil {
+		s.renderLogin(w, "Password sign-in is disabled. Use single sign-on.")
 		return
 	}
 	if err := r.ParseForm(); err != nil {
 		s.renderLogin(w, "bad form")
 		return
 	}
-	u := r.FormValue("u")
-	p := r.FormValue("p")
-
-	dampDelay := 300 * time.Millisecond
-	if u != s.cfg.Username {
-		time.Sleep(dampDelay)
-		s.renderLogin(w, "invalid credentials")
+	time.Sleep(250 * time.Millisecond) // dampen brute force
+	u, err := s.users.Authenticate(r.Context(), strings.TrimSpace(r.FormValue("u")), r.FormValue("p"))
+	if err != nil {
+		s.renderLogin(w, "Wrong email or password.")
 		return
 	}
-	if err := bcrypt.CompareHashAndPassword([]byte(s.cfg.PasswordHash), []byte(p)); err != nil {
-		time.Sleep(dampDelay)
-		s.renderLogin(w, "invalid credentials")
-		return
-	}
-
-	ttl := time.Duration(s.cfg.SessionDays) * 24 * time.Hour
-	s.setSessionCookie(w, u, ttl)
-	http.Redirect(w, r, "/browse", http.StatusSeeOther)
+	s.setSessionCookie(w, u.Email, time.Duration(s.cfg.SessionDays)*24*time.Hour)
+	http.Redirect(w, r, "/library", http.StatusSeeOther)
 }
 
 // setSessionCookie issues the signed session cookie. It uses SameSite=Lax (not
 // Strict) so the cookie is sent on the top-level redirect that completes an
 // external OIDC login — with Strict the browser withholds it on that
-// cross-site-initiated navigation and the user bounces back to /login. Lax still
-// withholds the cookie from cross-site POSTs, so state-changing endpoints stay
-// CSRF-safe.
+// cross-site-initiated navigation and the user bounces back to sign-in. Lax
+// still withholds the cookie from cross-site POSTs, so state-changing endpoints
+// stay CSRF-safe.
 func (s *Server) setSessionCookie(w http.ResponseWriter, username string, ttl time.Duration) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
@@ -95,5 +86,5 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

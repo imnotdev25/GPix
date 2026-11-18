@@ -1,10 +1,10 @@
 package web
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,16 +42,14 @@ func (s *Server) requireAPIToken(next http.HandlerFunc) http.HandlerFunc {
 				writeAPIError(w, http.StatusUnauthorized, "invalid token")
 				return
 			}
-			ctx := context.WithValue(r.Context(), ctxKeyUser, "api:"+t.Label)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			next.ServeHTTP(w, withUser(r, "api:"+t.Label))
 			return
 		}
 		// Session cookie (SPA). Cookies are SameSite=Lax, so cross-site POSTs
 		// don't carry them; same-origin fetches from the SPA do.
 		if c, err := r.Cookie(sessionCookieName); err == nil {
 			if user, verr := s.verifySession(c.Value); verr == nil {
-				ctx := context.WithValue(r.Context(), ctxKeyUser, user)
-				next.ServeHTTP(w, r.WithContext(ctx))
+				next.ServeHTTP(w, withUser(r, user))
 				return
 			}
 		}
@@ -85,54 +83,16 @@ func (s *Server) apiPing(w http.ResponseWriter, r *http.Request) {
 }
 
 type apiMediaItem struct {
-	Key       string    `json:"key"`
-	Name      string    `json:"name"`
-	Class     string    `json:"class"` // photo | video | doc | file
-	Encrypted bool      `json:"encrypted"`
-	Size      int64     `json:"size"`
-	Mtime     time.Time `json:"mtime"`
-	Thumb     string    `json:"thumb"`
-	Original  string    `json:"original"`
-}
-
-// apiMediaList returns one page of library items using Google's native cursor
-// pagination. This returns the first page immediately instead of listing the
-// entire library up front (which made the first request hang on large
-// libraries). `cursor` is the opaque token from the previous page's
-// `nextCursor` (empty for the first page); `nextCursor` is empty when done.
-func (s *Server) apiMediaList(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := withTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	cursor := r.URL.Query().Get("cursor")
-	if allDigits(cursor) {
-		// An older app build sent an integer offset here. That is not a valid
-		// Google resume token (it makes lib-state 400 "invalid argument"), so
-		// treat it as "first page" instead of erroring.
-		cursor = ""
-	}
-	page, err := s.gpc().ListPage(ctx, cursor)
-	if err != nil {
-		writeAPIError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	items := make([]apiMediaItem, 0, len(page.Items))
-	for _, it := range page.Items {
-		display, class, disguised := classifyItem(it.Filename, it.Kind)
-		items = append(items, apiMediaItem{
-			Key:       it.MediaKey,
-			Name:      display,
-			Class:     string(class),
-			Encrypted: disguised && class != classFile,
-			Size:      it.SizeBytes,
-			Mtime:     it.Mtime,
-			Thumb:     "/api/v1/media/" + it.MediaKey + "/thumb",
-			Original:  "/api/v1/media/" + it.MediaKey + "/original",
-		})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"items":      items,
-		"nextCursor": page.NextToken,
-	})
+	Key          string    `json:"key"`
+	Name         string    `json:"name"`
+	Class        string    `json:"class"` // photo | video | doc | file
+	Encrypted    bool      `json:"encrypted"`
+	Size         int64     `json:"size"`
+	Mtime        time.Time `json:"mtime"`
+	Thumb        string    `json:"thumb"`
+	Original     string    `json:"original"`
+	ThumbPending bool      `json:"thumbPending,omitempty"` // gpix is still rendering the thumbnail
+	Tags         []string  `json:"tags,omitempty"`
 }
 
 // apiThumb serves a thumbnail (decrypted/rendered for disguised items). Reuses
@@ -168,6 +128,7 @@ func (s *Server) apiUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	quality := gpmc.QualityOriginal
 	uploadID := randID()
+	var mtime time.Time
 	results := make([]map[string]string, 0)
 	for {
 		part, err := mr.NextPart()
@@ -187,18 +148,24 @@ func (s *Server) apiUpload(w http.ResponseWriter, r *http.Request) {
 			case "quota":
 				quality = gpmc.QualityUseQuota
 			}
+		case "mtime":
+			// The file's modification time from the client (ms since the
+			// epoch), used when the file has no capture date of its own.
+			b, _ := io.ReadAll(io.LimitReader(part, 32))
+			if ms, perr := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64); perr == nil && ms > 0 {
+				mtime = time.UnixMilli(ms)
+			}
 		case "files":
 			fn := part.FileName()
 			if fn == "" {
 				continue
 			}
-			name, status, key := parseUploadResult(s.uploadOne(r, part, fn, quality, uploadID))
+			name, status, key := parseUploadResult(s.uploadOne(r, part, fn, quality, uploadID, mtime))
 			results = append(results, map[string]string{"name": name, "status": status, "key": key})
+			mtime = time.Time{} // applies only to the file right after it
 		}
 	}
-	if lib := s.libc(); lib != nil {
-		lib.Invalidate()
-	}
+	// New items reach the listing cache through the upload hook (see main.go).
 	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
 
@@ -221,7 +188,7 @@ func (s *Server) apiDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if lib := s.libc(); lib != nil {
-		lib.Invalidate()
+		lib.Remove(key)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
@@ -239,6 +206,7 @@ type apiShare struct {
 	AllowOriginal bool       `json:"allowOriginal"`
 	CreatedAt     time.Time  `json:"createdAt"`
 	Count         int        `json:"count"`
+	DirectURL     string     `json:"directUrl,omitempty"` // starts the download (a .zip for several items)
 }
 
 func (s *Server) shareURL(token string) string {
@@ -262,6 +230,7 @@ func (s *Server) toAPIShare(sh share.Share) apiShare {
 		AllowOriginal: sh.AllowOriginal,
 		CreatedAt:     sh.CreatedAt,
 		Count:         len(sh.Items),
+		DirectURL:     s.directURL(sh),
 	}
 }
 
@@ -400,21 +369,35 @@ func (s *Server) apiImportGoogleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		AuthData string `json:"authData"`
-		Workers  int    `json:"workers"`
+		AuthData  string `json:"authData"`
+		AccountID int64  `json:"accountId"` // a linked account to copy from, instead of authData
+		Workers   int    `json:"workers"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "bad json: "+err.Error())
 		return
 	}
-	if strings.TrimSpace(body.AuthData) == "" {
-		writeAPIError(w, http.StatusBadRequest, "authData required")
+	authData := strings.TrimSpace(body.AuthData)
+	if body.AccountID > 0 {
+		if body.AccountID == s.accts.ActiveID() {
+			writeAPIError(w, http.StatusBadRequest, "that's the account gpix is using now; pick another account to copy from")
+			return
+		}
+		ad, err := s.accts.AuthData(r.Context(), body.AccountID)
+		if err != nil {
+			writeAPIError(w, http.StatusNotFound, "no such linked account")
+			return
+		}
+		authData = ad
+	}
+	if authData == "" {
+		writeAPIError(w, http.StatusBadRequest, "choose a linked account or paste its GP_AUTH_DATA")
 		return
 	}
 	if body.Workers <= 0 {
 		body.Workers = 3
 	}
-	if err := s.importer.StartGoogle(body.AuthData, body.Workers); err != nil {
+	if err := s.importer.StartGoogle(authData, body.Workers); err != nil {
 		writeAPIError(w, http.StatusConflict, err.Error())
 		return
 	}

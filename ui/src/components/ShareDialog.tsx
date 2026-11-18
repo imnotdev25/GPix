@@ -32,6 +32,7 @@ export default function ShareDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [url, setUrl] = useState("");
+  const [direct, setDirect] = useState("");
   const toast = useToast();
   const n = keys.length;
 
@@ -52,7 +53,7 @@ export default function ShareDialog({
     setBusy(true);
     setError("");
     try {
-      const share = await api.post<{ url: string }>("/api/v1/shares", {
+      const share = await api.post<{ url: string; directUrl?: string }>("/api/v1/shares", {
         keys,
         title: title.trim(),
         password,
@@ -61,6 +62,7 @@ export default function ShareDialog({
         allowOriginal,
       });
       setUrl(share.url);
+      setDirect(share.directUrl ?? "");
       onCreated?.();
       copy(share.url, true);
     } catch (err) {
@@ -102,6 +104,18 @@ export default function ShareDialog({
             <Icon name="external" size={15} />
           </a>
         </div>
+        {direct && (
+          <>
+            <p className="modal-text">Direct download link (starts the download, no page{n > 1 ? "; a .zip" : ""}):</p>
+            <div className="link-box">
+              <code title={direct}>{direct}</code>
+              <button className="btn btn-sm" onClick={() => copy(direct)}>
+                <Icon name="copy" size={15} />
+                Copy
+              </button>
+            </div>
+          </>
+        )}
         <p className="muted">You can revoke it any time under Shares.</p>
       </Modal>
     );

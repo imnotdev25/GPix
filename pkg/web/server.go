@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"gpix/pkg/accounts"
+	"gpix/pkg/albums"
 	"gpix/pkg/apitoken"
 	"gpix/pkg/gpmc"
 	"gpix/pkg/gwcreds"
@@ -54,14 +55,20 @@ type Server struct {
 	pageTmpls      map[string]*template.Template
 	thumbDir       string
 	thumbLocks     sync.Map
-	thumbSem       chan struct{} // bounds background thumbnail generation
+	thumbJobs      chan thumbJob // background thumbnail rendering
+	thumbQueued    sync.Map      // queue key -> true while queued or rendering
+	thumbFailed    sync.Map      // media key -> time of the last failed render
+	thumbLogMu     sync.Mutex    // rate-limits render-failure warnings
+	thumbLogAt     time.Time
+	thumbLogN      int
+	albums         *albums.Store // gpix's own albums and tags; may be nil
 }
 
 // New builds the web server. lib is the shared library cache, gw the gateway-
 // credentials store, crypt the media-encryption manager, and sh the share store
 // backing the public /s/ links. Any of them may be nil to disable the related
 // feature.
-func New(cfg Config, accts *accounts.Manager, gw *gwcreds.Store, crypt *mediacrypt.Manager, sh *share.Store, oc *oidc.Client, us *users.Store, imp *immichimport.Importer, at *apitoken.Store, up *uploads.Store, log *slog.Logger) (*Server, error) {
+func New(cfg Config, accts *accounts.Manager, gw *gwcreds.Store, crypt *mediacrypt.Manager, sh *share.Store, oc *oidc.Client, us *users.Store, imp *immichimport.Importer, at *apitoken.Store, up *uploads.Store, al *albums.Store, log *slog.Logger) (*Server, error) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -93,10 +100,17 @@ func New(cfg Config, accts *accounts.Manager, gw *gwcreds.Store, crypt *mediacry
 		mediaSignKey:   deriveKey(cfg.SecretKey, "media"),
 		tempSemaphore:  make(chan struct{}, cfg.MaxConcurrentUploads),
 		thumbDir:       thumbDir,
-		thumbSem:       make(chan struct{}, 6), // parallel background thumbnail generation
+		albums:         al,
 	}
 	if err := s.loadTemplates(); err != nil {
 		return nil, fmt.Errorf("web: load templates: %w", err)
+	}
+	// With GPIX_THUMB_GEN off there's no queue, so queueThumb drops every job.
+	if cfg.ThumbGen {
+		s.thumbJobs = make(chan thumbJob, 512)
+		for i := 0; i < thumbWorkers(); i++ {
+			go s.thumbWorker()
+		}
 	}
 	s.httpSrv = &http.Server{
 		Addr:              cfg.Listen,

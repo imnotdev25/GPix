@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gpix/pkg/disguise"
 	"gpix/pkg/gpmc"
@@ -64,7 +65,7 @@ func (s *Server) handleUploadSubmit(w http.ResponseWriter, r *http.Request) {
 			if fn == "" {
 				continue
 			}
-			results = append(results, s.uploadOne(r, part, fn, quality, uploadID))
+			results = append(results, s.uploadOne(r, part, fn, quality, uploadID, time.Time{}))
 		case "_csrf":
 			_, _ = io.Copy(io.Discard, part)
 		}
@@ -81,7 +82,10 @@ func (s *Server) handleUploadSubmit(w http.ResponseWriter, r *http.Request) {
 	s.progressBus.Publish(uploadID, "done")
 }
 
-func (s *Server) uploadOne(r *http.Request, src io.Reader, name string, quality gpmc.Quality, uploadID string) string {
+// uploadOne uploads one file. mtime is the file's modification time as the
+// client knows it (zero if unknown); it dates the item when the file itself
+// has no capture date.
+func (s *Server) uploadOne(r *http.Request, src io.Reader, name string, quality gpmc.Quality, uploadID string, mtime time.Time) string {
 	select {
 	case s.tempSemaphore <- struct{}{}:
 	case <-r.Context().Done():
@@ -145,15 +149,21 @@ func (s *Server) uploadOne(r *http.Request, src io.Reader, name string, quality 
 
 	s.progressBus.Publish(uploadID, "uploading "+displayName+" to google photos…")
 	upOpts := gpmc.UploadOpts{Quality: quality, OverrideName: commitName}
-	// Prefer the photo's real capture date (EXIF) over the upload time.
+	// Date it by when it was taken (EXIF / video metadata), else by the file's
+	// own modification time from the client, else by the upload time.
 	if dt, ok := gpmc.ExifDate(tmpPath); ok {
 		upOpts.Mtime = dt
+	} else if !mtime.IsZero() {
+		upOpts.Mtime = mtime
 	}
 	res, err := s.gpc().UploadFileWithProgress(r.Context(), uploadPath, upOpts, func(ev gpmc.UploadEvent) {
 		s.progressBus.Publish(uploadID, fmt.Sprintf("%s · %s · %d/%d", displayName, ev.Stage.String(), ev.BytesDone, ev.BytesTotal))
 	})
 	if err != nil {
 		return displayName + "\terror: " + err.Error()
+	}
+	if wasDisguised && res.MediaKey != "" {
+		s.thumbFromUpload(res.MediaKey, name, tmpPath)
 	}
 	marker := "uploaded"
 	if wasDisguised {
@@ -166,6 +176,27 @@ func (s *Server) uploadOne(r *http.Request, src io.Reader, name string, quality 
 		marker = "already in library"
 	}
 	return displayName + "\t" + marker + " · " + res.MediaKey
+}
+
+// thumbFromUpload renders an encrypted/disguised upload's thumbnails in the
+// background from the plaintext still on disk, so it shows in the grid right
+// away instead of after gpix downloads and decrypts it again. The file is
+// hard-linked first because the caller deletes its copy when it returns.
+func (s *Server) thumbFromUpload(mediaKey, name, plainPath string) {
+	kind := thumbKindFor(name, classForExt(name))
+	if kind == "" || s.thumbCached(mediaKey, thumbSizes[0], kind) {
+		return
+	}
+	keep := plainPath + ".thumb"
+	if err := os.Link(plainPath, keep); err != nil {
+		return // the grid's background render will fetch it from Google instead
+	}
+	s.queueThumb(thumbJob{
+		key:     mediaKey,
+		kind:    kind,
+		open:    func() (io.ReadCloser, error) { return os.Open(keep) },
+		cleanup: func() { os.Remove(keep) },
+	})
 }
 
 func readHead(path string, n int) ([]byte, error) {

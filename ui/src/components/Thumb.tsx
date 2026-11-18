@@ -1,31 +1,49 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { SyntheticEvent } from "react";
 import { thumbUrl } from "../api";
 import type { MediaItem } from "../types";
 import Icon from "./Icon";
 
-/** Thumb renders a media thumbnail that fades in once decoded. For encrypted
- *  photos/documents the server renders the real thumbnail in the background
- *  (Google only holds a blank placeholder), so this re-requests a few times
- *  until it resolves. */
+// While gpix is still rendering an encrypted item's thumbnail the server sends
+// a 1×1 placeholder. Retry on this schedule until the real image arrives.
+const RETRY_MS = [1500, 2500, 4000, 6000, 9000, 13000, 20000, 30000];
+
+/** Thumb renders a media thumbnail that fades in once decoded. It only
+ *  re-requests while it is still showing a placeholder, so a thumbnail that
+ *  has loaded never reloads (no flicker). */
 export default function Thumb({ item, size = 512 }: { item: MediaItem; size?: number }) {
   const [bust, setBust] = useState(0);
   const [failed, setFailed] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [waiting, setWaiting] = useState(false);
+  const timer = useRef(0);
 
-  const mayBePending = item.encrypted && (item.class === "photo" || item.class === "doc");
+  useEffect(() => () => window.clearTimeout(timer.current), []);
 
-  useEffect(() => {
-    if (!mayBePending) return;
-    const timers = [3000, 8000, 18000, 40000].map((d) =>
-      window.setTimeout(() => setBust((b) => b + 1), d),
-    );
-    return () => timers.forEach(clearTimeout);
-  }, [mayBePending, item.key]);
+  const retry = () => {
+    if (bust >= RETRY_MS.length) {
+      setWaiting(false);
+      setFailed(true);
+      return;
+    }
+    setWaiting(true);
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setBust((b) => b + 1), RETRY_MS[bust]);
+  };
 
-  // A retry may succeed where the first request failed.
-  useEffect(() => {
-    if (bust) setFailed(false);
-  }, [bust]);
+  const onLoad = (e: SyntheticEvent<HTMLImageElement>) => {
+    if (e.currentTarget.naturalWidth <= 1) {
+      retry(); // gpix is still rendering it
+      return;
+    }
+    setWaiting(false);
+    setLoaded(true);
+  };
+
+  const onError = () => {
+    if (item.encrypted && bust < RETRY_MS.length) retry();
+    else setFailed(true);
+  };
 
   if (failed || item.class === "file") {
     const dot = item.name.lastIndexOf(".");
@@ -47,15 +65,18 @@ export default function Thumb({ item, size = 512 }: { item: MediaItem; size?: nu
   }
 
   return (
-    <img
-      src={thumbUrl(item, size, bust)}
-      alt=""
-      loading="lazy"
-      decoding="async"
-      draggable={false}
-      className={loaded ? "loaded" : undefined}
-      onLoad={() => setLoaded(true)}
-      onError={() => setFailed(true)}
-    />
+    <>
+      <img
+        src={thumbUrl(item, size, bust)}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        draggable={false}
+        className={loaded ? "loaded" : undefined}
+        onLoad={onLoad}
+        onError={onError}
+      />
+      {waiting && <span className="thumb-wait" aria-hidden="true" />}
+    </>
   );
 }

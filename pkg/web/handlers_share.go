@@ -267,7 +267,9 @@ func (s *Server) handleShareRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Query().Get("inline") != "1" {
-		_ = s.share.RecordDownload(r.Context(), sh.Token)
+		if err := s.share.RecordDownload(r.Context(), sh.Token); err != nil {
+			s.log.Warn("share: count download", "share", redactPath("/s/"+sh.Token), "err", err)
+		}
 	}
 	attachment := r.URL.Query().Get("inline") != "1"
 	s.proxyDownload(w, r, item.MediaKey, attachment)

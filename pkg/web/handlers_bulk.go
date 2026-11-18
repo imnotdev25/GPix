@@ -79,7 +79,7 @@ func (s *Server) apiMediaBulkDelete(w http.ResponseWriter, r *http.Request) {
 			s.log.Warn("upload log: forget deleted items", "err", err)
 		}
 	}
-	rt.Lib.Invalidate()
+	rt.Lib.Remove(deleted...)
 	if deleted == nil {
 		deleted = []string{}
 	}

@@ -62,6 +62,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /s/{token}", s.handleSharePassword)
 	mux.HandleFunc("GET /s/{token}/thumb/{idx}", s.handleShareThumb)
 	mux.HandleFunc("GET /s/{token}/raw/{idx}", s.handleShareRaw)
+	mux.HandleFunc("GET /s/{token}/download", s.handleShareDownload)
 
 	// JSON API for native clients (Bearer API-token auth). See pkg/web/api.go.
 	mux.HandleFunc("GET /api/v1/ping", s.requireAPIToken(s.apiPing))
@@ -78,6 +79,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/auth/me", s.apiAuthMe)
 	mux.HandleFunc("POST /api/v1/auth/login", s.apiAuthLogin)
 	mux.HandleFunc("POST /api/v1/auth/logout", s.apiAuthLogout)
+	mux.HandleFunc("POST /api/v1/auth/signup", s.apiAuthSignup)
 
 	mux.HandleFunc("GET /api/v1/gateways", s.requireAPIToken(s.apiGateways))
 	mux.HandleFunc("POST /api/v1/gateways/regenerate", s.requireAPIToken(s.apiGatewaysRegenerate))
@@ -91,6 +93,19 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/delete-all", s.requireAPIToken(s.apiDeleteAll))
 	mux.HandleFunc("GET /api/v1/gpix-uploads/summary", s.requireAPIToken(s.apiGpixUploadsSummary))
 	mux.HandleFunc("POST /api/v1/gpix-uploads/delete", s.requireAPIToken(s.apiGpixUploadsDelete))
+	mux.HandleFunc("GET /api/v1/media/timeline", s.requireAPIToken(s.apiMediaTimeline))
+
+	// gpix's own albums and tags (not synced with Google Photos).
+	mux.HandleFunc("GET /api/v1/albums", s.requireAPIToken(s.apiAlbumsList))
+	mux.HandleFunc("POST /api/v1/albums", s.requireAPIToken(s.apiAlbumCreate))
+	mux.HandleFunc("GET /api/v1/albums/{id}", s.requireAPIToken(s.apiAlbumGet))
+	mux.HandleFunc("POST /api/v1/albums/{id}", s.requireAPIToken(s.apiAlbumRename))
+	mux.HandleFunc("DELETE /api/v1/albums/{id}", s.requireAPIToken(s.apiAlbumDelete))
+	mux.HandleFunc("POST /api/v1/albums/{id}/items", s.requireAPIToken(s.apiAlbumAddItems))
+	mux.HandleFunc("POST /api/v1/albums/{id}/items/remove", s.requireAPIToken(s.apiAlbumRemoveItems))
+	mux.HandleFunc("GET /api/v1/tags", s.requireAPIToken(s.apiTagsList))
+	mux.HandleFunc("POST /api/v1/tags/add", s.requireAPIToken(s.apiTagsAdd))
+	mux.HandleFunc("POST /api/v1/tags/remove", s.requireAPIToken(s.apiTagsRemove))
 
 	mux.HandleFunc("GET /api/v1/accounts", s.requireAPIToken(s.apiAccounts))
 	mux.HandleFunc("POST /api/v1/accounts/{id}/switch", s.requireAPIToken(s.apiAccountSwitch))
@@ -107,5 +122,6 @@ func (s *Server) routes() http.Handler {
 	// legacy server-rendered pages stay reachable at their existing paths.
 	mux.Handle("GET /", s.spaHandler())
 
-	return s.recoverPanic(s.logRequest(s.securityHeaders(s.corsAPI(mux))))
+	// logRequest is outermost so a recovered panic is still logged as a 500.
+	return s.logRequest(s.recoverPanic(s.securityHeaders(s.corsAPI(mux))))
 }

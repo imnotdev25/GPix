@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 // buildEndpoint renders a user-facing URL for a listen address. Wildcard binds
@@ -30,6 +31,14 @@ func buildEndpoint(listen string, r *http.Request) string {
 		host = reqHost
 	}
 	return scheme + "://" + net.JoinHostPort(host, port)
+}
+
+// webdavUser is the WebDAV username to show: the signed-in account's email.
+func webdavUser(r *http.Request) string {
+	if u := userFromCtx(r.Context()); !strings.HasPrefix(u, "api:") {
+		return u
+	}
+	return "" // signed in with an app token, not an account
 }
 
 func (s *Server) gatewaysView(r *http.Request, justGenerated, notice string) *gatewaysView {
@@ -61,7 +70,7 @@ func (s *Server) gatewaysView(r *http.Request, justGenerated, notice string) *ga
 
 		WebDAVEnabled:  s.cfg.WebDAVListen != "",
 		WebDAVEndpoint: buildEndpoint(s.cfg.WebDAVListen, r),
-		WebDAVUsername: s.cfg.Username,
+		WebDAVUsername: webdavUser(r),
 		WebDAVPassword: davPass,
 		HasWebDAVPass:  davPass != "",
 

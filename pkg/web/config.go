@@ -1,17 +1,14 @@
 package web
 
 import (
-	"errors"
-	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 )
 
 type Config struct {
 	Listen               string
-	Username             string
-	PasswordHash         string
 	DeviceProfile        string
 	TempDir              string
 	MaxConcurrentUploads int
@@ -19,9 +16,15 @@ type Config struct {
 	StreamTokenTTLMin    int
 	SecretKey            []byte
 
+	// LegacyUsername / LegacyPasswordHash hold the old GPIX_USERNAME and
+	// GPIX_PASSWORD_HASH settings. They're optional: when both are set, gpix
+	// imports them once as a sign-in account so existing setups keep working.
+	LegacyUsername     string
+	LegacyPasswordHash string
+
 	// DataDir is where runtime state lives (secret.key, gateways.json,
-	// encryption.key/json, shares.db). Empty means "next to the config file"
-	// (which is the current working directory by default). Set via GPIX_DATA_DIR.
+	// encryption.key/json, *.db, the thumbnail cache). Set via GPIX_DATA_DIR;
+	// defaults to the working directory.
 	DataDir string
 
 	// S3-compatible gateway (optional). Enabled when S3Listen is non-empty.
@@ -32,7 +35,7 @@ type Config struct {
 	S3Region    string
 
 	// WebDAV gateway (optional). Enabled when WebDAVListen is non-empty.
-	// Authenticates against Username/PasswordHash above.
+	// Accepts a gpix account's email + password, or the WebDAV app password.
 	WebDAVListen   string
 	WebDAVBasePath string
 
@@ -40,22 +43,31 @@ type Config struct {
 	// the user flips it in the web UI). Once set via the UI, that choice wins.
 	EncryptUploads bool
 
+	// ThumbGen lets gpix render thumbnails itself for encrypted/disguised items
+	// (Google only has a blank one for those). On by default; GPIX_THUMB_GEN=false
+	// turns it off to save CPU, and already-rendered thumbnails are still served.
+	ThumbGen bool
+
 	// ServerURL is the externally-reachable base URL of this gpix instance
 	// (e.g. https://photos.example.com), used to build absolute share links and
 	// redirects. Falls back to the request's own host when empty.
 	ServerURL string
 
 	// Logto / OIDC login (optional). Enabled when LogtoEndpoint, LogtoClientID
-	// and LogtoClientSecret are all set. SignupAllowlist (emails or @domains)
-	// limits who may register; MaxUsers caps OIDC registrations (0 = unlimited).
+	// and LogtoClientSecret are all set.
 	LogtoEndpoint     string
 	LogtoClientID     string
 	LogtoClientSecret string
 	LogtoRedirect     string // defaults to ServerURL + /auth/logto/callback
-	SignupAllowlist   []string
-	MaxUsers          int
 
-	// DisablePasswordLogin hides the username/password form and rejects password
+	// SignupAllowlist (emails or @domains) limits who may create an account,
+	// by password sign-up or single sign-on. Empty allows anyone.
+	SignupAllowlist []string
+	// MaxUsers caps how many accounts can exist (0 = no cap). The default, 1,
+	// means the first person to sign up owns the server and sign-up then closes.
+	MaxUsers int
+
+	// DisablePasswordLogin hides the email/password form and rejects password
 	// logins, leaving only OIDC. Ignored unless Logto is enabled, so you can't
 	// lock yourself out by disabling both.
 	DisablePasswordLogin bool
@@ -66,16 +78,15 @@ func (c Config) LogtoEnabled() bool {
 	return c.LogtoEndpoint != "" && c.LogtoClientID != "" && c.LogtoClientSecret != ""
 }
 
-// PasswordLoginEnabled reports whether the username/password form is active.
+// PasswordLoginEnabled reports whether email/password sign-in is active.
 // Password login can only be turned off when OIDC is available.
 func (c Config) PasswordLoginEnabled() bool {
 	return !(c.DisablePasswordLogin && c.LogtoEnabled())
 }
 
-// LoadConfig builds the configuration. Every value can come from environment
-// variables (typically via .env); the gpix-web.conf file at path is optional
-// and, when present, provides defaults that environment variables override.
-func LoadConfig(path string) (Config, error) {
+// LoadConfig builds the configuration from environment variables (typically
+// loaded from .env). There is no config file.
+func LoadConfig() Config {
 	cfg := Config{
 		Listen:               "0.0.0.0:8080",
 		DeviceProfile:        "pixel-xl",
@@ -85,46 +96,41 @@ func LoadConfig(path string) (Config, error) {
 		S3Bucket:             "gpix",
 		S3Region:             "us-east-1",
 		WebDAVBasePath:       "/",
+		MaxUsers:             1,
+		ThumbGen:             true,
 	}
-
-	// Optional config file (kept for backward compatibility).
-	if data, err := os.ReadFile(path); err == nil {
-		if perr := parseConfFile(string(data), &cfg); perr != nil {
-			return cfg, perr
-		}
-	} else if !os.IsNotExist(err) {
-		return cfg, fmt.Errorf("read config: %w", err)
-	}
-
 	applyEnv(&cfg)
-
-	if cfg.Username == "" {
-		return cfg, errors.New("config: username is required (set GPIX_USERNAME or username in gpix-web.conf)")
-	}
-	if cfg.PasswordHash == "" {
-		return cfg, errors.New("config: password hash is required (set GPIX_PASSWORD_HASH or password_hash; generate with `gpix -hashpw`)")
-	}
 	if cfg.TempDir == "" {
 		cfg.TempDir = os.TempDir()
 	}
-	return cfg, nil
+	return cfg
 }
 
-func parseConfFile(data string, cfg *Config) error {
-	for ln, line := range strings.Split(data, "\n") {
+// LegacyConfVars reads an old gpix-web.conf (no longer used) and returns the
+// environment variable names for the settings it contains, so startup can tell
+// the user what to move into .env. found is false when there's no such file.
+func LegacyConfVars(path string) (vars []string, found bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	seen := map[string]bool{}
+	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		eq := strings.IndexByte(line, '=')
 		if eq <= 0 {
-			return fmt.Errorf("config line %d: missing =", ln+1)
+			continue
 		}
-		k := strings.TrimSpace(line[:eq])
-		v := strings.Trim(strings.TrimSpace(line[eq+1:]), `"'`)
-		applyKey(cfg, k, v)
+		if name, ok := envNames[strings.TrimSpace(line[:eq])]; ok && !seen[name] {
+			seen[name] = true
+			vars = append(vars, name)
+		}
 	}
-	return nil
+	sort.Strings(vars)
+	return vars, true
 }
 
 // applyKey sets a single config key from its (already unquoted) string value.
@@ -133,9 +139,9 @@ func applyKey(cfg *Config, k, v string) {
 	case "listen":
 		cfg.Listen = v
 	case "username":
-		cfg.Username = v
+		cfg.LegacyUsername = v
 	case "password_hash":
-		cfg.PasswordHash = v
+		cfg.LegacyPasswordHash = v
 	case "device_profile":
 		cfg.DeviceProfile = v
 	case "temp_dir":
@@ -176,6 +182,10 @@ func applyKey(cfg *Config, k, v string) {
 		}
 	case "encrypt_uploads":
 		cfg.EncryptUploads = truthy(v)
+	case "thumb_gen":
+		if strings.TrimSpace(v) != "" {
+			cfg.ThumbGen = truthy(v)
+		}
 	case "server_url":
 		cfg.ServerURL = strings.TrimRight(v, "/")
 	case "logto_endpoint":
@@ -189,7 +199,7 @@ func applyKey(cfg *Config, k, v string) {
 	case "signup_allowlist":
 		cfg.SignupAllowlist = splitList(v)
 	case "max_users":
-		if n, _ := strconv.Atoi(v); n >= 0 {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
 			cfg.MaxUsers = n
 		}
 	case "disable_password_login":
@@ -208,37 +218,39 @@ func splitList(v string) []string {
 	return out
 }
 
+// envNames maps each setting to its environment variable.
+var envNames = map[string]string{
+	"listen":                   "GPIX_LISTEN",
+	"username":                 "GPIX_USERNAME",
+	"password_hash":            "GPIX_PASSWORD_HASH",
+	"device_profile":           "GPIX_DEVICE_PROFILE",
+	"temp_dir":                 "GPIX_TEMP_DIR",
+	"data_dir":                 "GPIX_DATA_DIR",
+	"max_concurrent_uploads":   "GPIX_MAX_CONCURRENT_UPLOADS",
+	"session_days":             "GPIX_SESSION_DAYS",
+	"stream_token_ttl_minutes": "GPIX_STREAM_TOKEN_TTL_MIN",
+	"s3_listen":                "GPIX_S3_LISTEN",
+	"s3_access_key":            "GPIX_S3_ACCESS_KEY",
+	"s3_secret_key":            "GPIX_S3_SECRET_KEY",
+	"s3_bucket":                "GPIX_S3_BUCKET",
+	"s3_region":                "GPIX_S3_REGION",
+	"webdav_listen":            "GPIX_WEBDAV_LISTEN",
+	"webdav_base_path":         "GPIX_WEBDAV_BASE_PATH",
+	"encrypt_uploads":          "GPIX_ENCRYPT_UPLOADS",
+	"thumb_gen":                "GPIX_THUMB_GEN",
+	"server_url":               "GPIX_SERVER_URL",
+	"logto_endpoint":           "GPIX_LOGTO_ENDPOINT",
+	"logto_client_id":          "GPIX_LOGTO_CLIENT_ID",
+	"logto_client_secret":      "GPIX_LOGTO_CLIENT_SECRET",
+	"logto_redirect":           "GPIX_LOGTO_REDIRECT",
+	"signup_allowlist":         "GPIX_SIGNUP_ALLOWLIST",
+	"max_users":                "GPIX_MAX_USERS",
+	"disable_password_login":   "GPIX_DISABLE_PASSWORD_LOGIN",
+}
+
 // applyEnv overlays GPIX_* environment variables (plus SERVER_URL) onto cfg.
-// Environment values take precedence over the config file.
 func applyEnv(cfg *Config) {
-	env := map[string]string{
-		"listen":                   "GPIX_LISTEN",
-		"username":                 "GPIX_USERNAME",
-		"password_hash":            "GPIX_PASSWORD_HASH",
-		"device_profile":           "GPIX_DEVICE_PROFILE",
-		"temp_dir":                 "GPIX_TEMP_DIR",
-		"data_dir":                 "GPIX_DATA_DIR",
-		"max_concurrent_uploads":   "GPIX_MAX_CONCURRENT_UPLOADS",
-		"session_days":             "GPIX_SESSION_DAYS",
-		"stream_token_ttl_minutes": "GPIX_STREAM_TOKEN_TTL_MIN",
-		"s3_listen":                "GPIX_S3_LISTEN",
-		"s3_access_key":            "GPIX_S3_ACCESS_KEY",
-		"s3_secret_key":            "GPIX_S3_SECRET_KEY",
-		"s3_bucket":                "GPIX_S3_BUCKET",
-		"s3_region":                "GPIX_S3_REGION",
-		"webdav_listen":            "GPIX_WEBDAV_LISTEN",
-		"webdav_base_path":         "GPIX_WEBDAV_BASE_PATH",
-		"encrypt_uploads":          "GPIX_ENCRYPT_UPLOADS",
-		"server_url":               "GPIX_SERVER_URL",
-		"logto_endpoint":           "GPIX_LOGTO_ENDPOINT",
-		"logto_client_id":          "GPIX_LOGTO_CLIENT_ID",
-		"logto_client_secret":      "GPIX_LOGTO_CLIENT_SECRET",
-		"logto_redirect":           "GPIX_LOGTO_REDIRECT",
-		"signup_allowlist":         "GPIX_SIGNUP_ALLOWLIST",
-		"max_users":                "GPIX_MAX_USERS",
-		"disable_password_login":   "GPIX_DISABLE_PASSWORD_LOGIN",
-	}
-	for key, envName := range env {
+	for key, envName := range envNames {
 		if v, ok := os.LookupEnv(envName); ok {
 			applyKey(cfg, key, v)
 		}
