@@ -48,11 +48,12 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   Future<void> _pick() async {
-    final res = await FilePicker.platform.pickFiles(allowMultiple: true);
-    if (res == null) return;
+    // Picks several files (the default). On Android each is copied into the
+    // app cache, so it has a real path.
+    final files = await FilePicker.pickFiles();
     _add([
-      for (final f in res.files)
-        if (f.path != null) _Entry(f.path!, f.name, f.size),
+      for (final f in files)
+        if (f.path != null) _Entry(f.path!, f.name, f.lengthSync() ?? 0),
     ]);
   }
 
