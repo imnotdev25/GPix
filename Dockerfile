@@ -29,13 +29,15 @@ RUN go mod download
 # start that binary ("exec /usr/local/bin/gpix: no such file or directory").
 # With the tag it uses its embedded WASM decoder. The check below stops the
 # build if the binary ever ends up dynamically linked again.
+# -tags wasm2go: run that decoder as plain Go instead of on wazero, which never
+# frees a decoder's memory (about 400 MB per large HEIC photo).
 RUN apk add --no-cache file
 COPY . .
 COPY --from=ui /src/pkg/web/dist ./pkg/web/dist
 # Shown in the web app's sidebar; docker.yml passes the tag or branch-commit.
 ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
-    go build -tags nodynamic -trimpath -ldflags="-s -w -X gpix/pkg/web.Version=${VERSION}" -o /out/gpix . \
+    go build -tags "nodynamic wasm2go" -trimpath -ldflags="-s -w -X gpix/pkg/web.Version=${VERSION}" -o /out/gpix . \
  && file /out/gpix \
  && file /out/gpix | grep -q "statically linked"
 

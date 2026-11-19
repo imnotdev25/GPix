@@ -443,6 +443,9 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 		"s3", cfg.S3Listen != "",
 		"webdav", cfg.WebDAVListen != "",
 	)
+	if web.LeakyHEICDecoder {
+		log.Warn(`built without -tags "nodynamic wasm2go": HEIC thumbnails leak about 400 MB per large photo; rebuild with those tags`)
+	}
 
 	runners := []func(context.Context) error{srv.Run}
 

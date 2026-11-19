@@ -232,7 +232,7 @@ func (s *Server) renderThumbs(ctx context.Context, mediaKey, kind string, open f
 		return nil
 	}
 
-	img, _, err := image.Decode(io.LimitReader(rc, thumbCacheMaxBytes))
+	img, release, err := decodeLimited(ctx, rc)
 	if err != nil {
 		return err
 	}
@@ -240,6 +240,7 @@ func (s *Server) renderThumbs(ctx context.Context, mediaKey, kind string, open f
 	// smaller ones from that. Smallest first, so grid tiles fill in soonest.
 	slices.Sort(missing)
 	big := downscale(img, missing[len(missing)-1])
+	release() // the full-size image is no longer needed
 	for _, sz := range missing {
 		bw := &byteWriter{}
 		if err := jpeg.Encode(bw, downscale(big, sz), &jpeg.Options{Quality: 82}); err != nil {

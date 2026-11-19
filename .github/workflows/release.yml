@@ -41,7 +41,8 @@ jobs:
             echo "→ $GOOS/$GOARCH"
             # nodynamic: keep the HEIC decoder from linking glibc via purego,
             # so the Linux binaries are static and run on any distro.
-            go build -tags nodynamic -trimpath -ldflags "-s -w -X gpix/pkg/web.Version=${VERSION}" -o "$bin" .
+            # wasm2go: run it as plain Go; on wazero it never frees memory.
+            go build -tags "nodynamic wasm2go" -trimpath -ldflags "-s -w -X gpix/pkg/web.Version=${VERSION}" -o "$bin" .
             name="gpix_${VERSION}_${GOOS}_${GOARCH}"
             if [ "$GOOS" = "windows" ]; then
               zip -q "dist/${name}.zip" "$bin" README.md LICENSE

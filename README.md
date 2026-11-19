@@ -37,7 +37,8 @@ gpix does those.
 ## Quick start
 
 ```bash
-go build .      # or: go run .
+# The tags keep the HEIC decoder static and stop it leaking memory.
+go build -tags "nodynamic wasm2go" .      # or: go run -tags "nodynamic wasm2go" .
 ```
 
 On first run gpix wants:
@@ -338,6 +339,7 @@ Google only has a blank thumbnail for an encrypted or disguised item, so gpix re
 - One download and decrypt produces every size gpix uses (256, 512 and 2048 px), smallest first.
 - Rendering starts in a background queue as soon as the library page is sent, before the browser asks for the images. The grid shows a placeholder and fills each tile in when its thumbnail is ready.
 - Files uploaded through gpix are thumbnailed from the local copy right after the upload, so nothing is downloaded again.
+- At most about 40 megapixels of photos are decoded at once (a 36 MP HEIC alone needs about 1 GB while decoding), so a burst of renders can't exhaust memory. Memory goes back to the OS a few seconds after rendering stops.
 - Thumbnails are cached **decrypted** under `gpix-thumbcache/` in the data folder. Delete that folder to purge them.
 - `GPIX_THUMB_GEN=false` turns rendering off to save CPU. Thumbnails already rendered are still served; new encrypted items then show a placeholder.
 
@@ -498,10 +500,10 @@ GPIX_LOG_FORMAT=text
 ## Build for Linux
 
 ```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags nodynamic -ldflags="-s -w" -o gpix .
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags "nodynamic wasm2go" -ldflags="-s -w" -o gpix .
 ```
 
-Fully static (the SQLite and image dependencies are pure Go), ~25 MB stripped. Keep `-tags nodynamic`: without it the HEIC decoder links against glibc, and the binary won't start on musl systems such as Alpine. Drop the binary on any Linux box with `.env` next to it; gpix creates its state files (`secret.key`, `gateways.json`, `encryption.key`, the `*.db` files, `gpix-thumbcache/`) on first run.
+Fully static (the SQLite and image dependencies are pure Go), ~25 MB stripped. Keep both tags: without `nodynamic` the HEIC decoder links against glibc, and the binary won't start on musl systems such as Alpine; without `wasm2go` it runs on wazero, which keeps about 400 MB per large HEIC photo it decodes. gpix logs a warning at startup when built without them. Drop the binary on any Linux box with `.env` next to it; gpix creates its state files (`secret.key`, `gateways.json`, `encryption.key`, the `*.db` files, `gpix-thumbcache/`) on first run.
 
 ---
 
