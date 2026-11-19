@@ -14,22 +14,6 @@ import (
 	"time"
 )
 
-func (s *Server) requireSession(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie(sessionCookieName)
-		if err != nil {
-			http.Redirect(w, r, "/signin", http.StatusSeeOther)
-			return
-		}
-		user, err := s.verifySession(c.Value)
-		if err != nil {
-			http.Redirect(w, r, "/signin", http.StatusSeeOther)
-			return
-		}
-		next.ServeHTTP(w, withUser(r, user))
-	}
-}
-
 // corsAPI adds permissive CORS headers to the /api/v1 responses and answers
 // preflight OPTIONS requests directly, so the Flutter *web* build (and any
 // browser client) can call the token-authenticated API cross-origin. The API
@@ -237,8 +221,7 @@ func longRunning(r *http.Request, rec *statusRecorder) bool {
 	}
 	p := r.URL.Path
 	return strings.HasPrefix(p, "/stream/") || strings.HasPrefix(p, "/raw/") ||
-		strings.HasSuffix(p, "/original") || strings.HasSuffix(p, "/download") ||
-		strings.HasPrefix(p, "/api/upload-progress/")
+		strings.HasSuffix(p, "/original") || strings.HasSuffix(p, "/download")
 }
 
 // Path prefixes whose next segment is a secret (share and signed media links).

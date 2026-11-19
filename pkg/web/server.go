@@ -6,7 +6,6 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"html/template"
 	"log/slog"
 	"net/http"
 	"os"
@@ -28,9 +27,6 @@ import (
 	"gpix/pkg/users"
 )
 
-//go:embed templates/*.html templates/partials/*.html
-var tmplFS embed.FS
-
 //go:embed static
 var staticFS embed.FS
 
@@ -48,11 +44,9 @@ type Server struct {
 	uploads        *uploads.Store // log of items gpix uploaded; may be nil
 	log            *slog.Logger
 	httpSrv        *http.Server
-	progressBus    *progressBus
 	sessionSignKey []byte
 	mediaSignKey   []byte
 	tempSemaphore  chan struct{}
-	pageTmpls      map[string]*template.Template
 	thumbDir       string
 	thumbLocks     sync.Map
 	thumbJobs      chan thumbJob // background thumbnail rendering
@@ -95,15 +89,11 @@ func New(cfg Config, accts *accounts.Manager, gw *gwcreds.Store, crypt *mediacry
 		apitokens:      at,
 		uploads:        up,
 		log:            log,
-		progressBus:    newProgressBus(),
 		sessionSignKey: deriveKey(cfg.SecretKey, "session"),
 		mediaSignKey:   deriveKey(cfg.SecretKey, "media"),
 		tempSemaphore:  make(chan struct{}, cfg.MaxConcurrentUploads),
 		thumbDir:       thumbDir,
 		albums:         al,
-	}
-	if err := s.loadTemplates(); err != nil {
-		return nil, fmt.Errorf("web: load templates: %w", err)
 	}
 	// With GPIX_THUMB_GEN off there's no queue, so queueThumb drops every job.
 	if cfg.ThumbGen {

@@ -32,8 +32,10 @@ RUN go mod download
 RUN apk add --no-cache file
 COPY . .
 COPY --from=ui /src/pkg/web/dist ./pkg/web/dist
+# Shown in the web app's sidebar; docker.yml passes the tag or branch-commit.
+ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
-    go build -tags nodynamic -trimpath -ldflags="-s -w" -o /out/gpix . \
+    go build -tags nodynamic -trimpath -ldflags="-s -w -X gpix/pkg/web.Version=${VERSION}" -o /out/gpix . \
  && file /out/gpix \
  && file /out/gpix | grep -q "statically linked"
 

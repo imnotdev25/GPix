@@ -13,6 +13,7 @@ import Connections from "./pages/Connections";
 import Tokens from "./pages/Tokens";
 import Accounts from "./pages/Accounts";
 import Albums, { AlbumPage, TagPage } from "./pages/Albums";
+import SharePublic from "./pages/SharePublic";
 
 export default function App() {
   const [me, setMe] = useState<Me | null>(null);
@@ -30,6 +31,10 @@ export default function App() {
   useEffect(() => {
     refresh();
   }, []);
+
+  // Share links open for anyone, signed in or not, without the app around them.
+  const shareToken = location.pathname.match(/^\/s\/([^/]+)\/?$/)?.[1];
+  if (shareToken) return <SharePublic token={decodeURIComponent(shareToken)} />;
 
   if (!me) {
     return (

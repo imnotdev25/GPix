@@ -40,6 +40,23 @@ export default function Connections() {
     load();
   };
 
+  // Uploads key backup files; the server answers with the updated view.
+  const importKeys = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setError("");
+    const form = new FormData();
+    for (const f of Array.from(files)) form.append("keys", f, f.name);
+    try {
+      const res = await fetch("/api/v1/encryption/keys", { method: "POST", credentials: "same-origin", body: form });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
+      setG(body as Gateways);
+      setNotice((body as Gateways).Notice || "Key imported.");
+    } catch (err) {
+      setError(errMsg(err));
+    }
+  };
+
   const deleteAll = async () => {
     const ok = await ask({
       title: "Delete your entire library?",
@@ -105,13 +122,39 @@ export default function Connections() {
             <button className="btn btn-primary" onClick={toggleEncryption}>
               {g.EncryptionEnabled ? "Turn encryption off" : "Turn encryption on"}
             </button>
-            <a className="btn" href="/settings/gateways/encryption-key">
+            <a className="btn" href="/api/v1/encryption/key-backup" download="gpix-encryption.key">
               Download key backup
             </a>
-            <a className="btn" href="/settings/gateways">
-              Manage decryption keys
-            </a>
+            <label className="btn">
+              Import key backup
+              <input
+                type="file"
+                multiple
+                hidden
+                onChange={(e) => {
+                  importKeys(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+            </label>
           </div>
+          {g.EncryptionKeys && g.EncryptionKeys.length > 1 && (
+            <div className="key-list">
+              {g.EncryptionKeys.map((k) => (
+                <div className="key-row" key={k.Fingerprint}>
+                  <code>{k.Fingerprint}</code>
+                  {k.Active ? (
+                    <span className="pill on">Encrypts new uploads</span>
+                  ) : (
+                    <span className="muted small">Decrypts older items</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="muted small" style={{ marginBottom: 0 }}>
+            Import a key backup to open items encrypted on another gpix server or with an older key.
+          </p>
         </div>
       )}
 

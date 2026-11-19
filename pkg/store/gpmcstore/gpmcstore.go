@@ -292,8 +292,16 @@ func (b *Backend) Put(ctx context.Context, key string, r io.Reader, _ int64, con
 	tf.Close()
 	etag := hex.EncodeToString(h.Sum(nil))
 
+	upOpts := gpmc.UploadOpts{Quality: b.opts.Quality, OverrideName: key}
+	// Use the photo's real capture date (EXIF) as its timestamp, not the upload
+	// time — read from the plaintext temp before it's encrypted or disguised.
+	if dt, ok := gpmc.ExifDate(tmpPath); ok {
+		upOpts.Mtime = dt
+	}
+
+	// Each step deletes the copy before it as soon as the next one exists, so
+	// one copy of the file is on disk while it uploads, not three.
 	uploadPath := tmpPath
-	commitName := key
 	switch {
 	case b.opts.Crypt != nil && b.opts.Crypt.Enabled():
 		// Encrypt, then disguise the ciphertext (it is no longer valid media).
@@ -302,13 +310,15 @@ func (b *Backend) Put(ctx context.Context, key string, r io.Reader, _ int64, con
 			return store.Object{}, fmt.Errorf("gpmcstore: encrypt: %w", eerr)
 		}
 		defer os.Remove(encPath)
+		os.Remove(tmpPath)
 		wrapped, werr := wrapToTemp(b.opts.TempDir, encPath, key)
 		if werr != nil {
 			return store.Object{}, fmt.Errorf("gpmcstore: disguise wrap: %w", werr)
 		}
 		defer os.Remove(wrapped)
+		os.Remove(encPath)
 		uploadPath = wrapped
-		commitName = key + ".mp4"
+		upOpts.OverrideName = key + ".mp4"
 	default:
 		if head, herr := readHead(tmpPath, 512); herr == nil && disguise.ShouldWrap(contentType, key, head) {
 			wrapped, werr := wrapToTemp(b.opts.TempDir, tmpPath, key)
@@ -316,17 +326,12 @@ func (b *Backend) Put(ctx context.Context, key string, r io.Reader, _ int64, con
 				return store.Object{}, fmt.Errorf("gpmcstore: disguise wrap: %w", werr)
 			}
 			defer os.Remove(wrapped)
+			os.Remove(tmpPath)
 			uploadPath = wrapped
-			commitName = key + ".mp4"
+			upOpts.OverrideName = key + ".mp4"
 		}
 	}
 
-	upOpts := gpmc.UploadOpts{Quality: b.opts.Quality, OverrideName: commitName}
-	// Use the photo's real capture date (EXIF) as its timestamp, not the upload
-	// time — read from the plaintext temp (before any encryption/disguise).
-	if dt, ok := gpmc.ExifDate(tmpPath); ok {
-		upOpts.Mtime = dt
-	}
 	res, err := b.gp.UploadFile(ctx, uploadPath, upOpts)
 	if err != nil {
 		return store.Object{}, fmt.Errorf("gpmcstore: upload: %w", err)

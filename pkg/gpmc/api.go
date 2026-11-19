@@ -135,7 +135,7 @@ func (c *Client) putFile(ctx context.Context, uploadID string, openBody func() (
 			c.invalidateToken()
 			return &APIError{Op: "put-bytes", Status: resp.StatusCode, Body: string(respBody)}
 		}
-		if resp.StatusCode >= 500 {
+		if retryableStatus(resp.StatusCode) {
 			return &APIError{Op: "put-bytes", Status: resp.StatusCode, Body: string(respBody)}
 		}
 		if resp.StatusCode != http.StatusOK {
@@ -228,7 +228,7 @@ func (c *Client) doProto(ctx context.Context, op, endpoint string, body []byte, 
 			c.invalidateToken()
 			return &APIError{Op: op, Status: resp.StatusCode, Body: string(respBody)}
 		}
-		if resp.StatusCode >= 500 {
+		if retryableStatus(resp.StatusCode) {
 			return &APIError{Op: op, Status: resp.StatusCode, Body: string(respBody)}
 		}
 		if resp.StatusCode != http.StatusOK {
@@ -241,6 +241,13 @@ func (c *Client) doProto(ctx context.Context, op, endpoint string, body []byte, 
 		return nil, err
 	}
 	return out, nil
+}
+
+// retryableStatus reports responses worth trying again: server errors, 409
+// (gRPC ABORTED, e.g. "The operation was aborted" when several uploads commit
+// to the library at once) and 429 (rate limited).
+func retryableStatus(code int) bool {
+	return code >= 500 || code == http.StatusConflict || code == http.StatusTooManyRequests
 }
 
 func backOff(ctx context.Context) backoff.BackOffContext {

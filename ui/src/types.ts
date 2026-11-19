@@ -28,6 +28,8 @@ export interface Me {
   signupOpen?: boolean;
   /** No account exists yet: the first sign-up owns the server. */
   firstRun?: boolean;
+  /** The running build (signed-in only), shown in the sidebar. */
+  version?: string;
 }
 
 export interface Account {

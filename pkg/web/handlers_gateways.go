@@ -85,102 +85,6 @@ func (s *Server) gatewaysView(r *http.Request, justGenerated, notice string) *ga
 	}
 }
 
-func (s *Server) handleGateways(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "gateways", pageData{
-		User:     userFromCtx(r.Context()),
-		Title:    "Connections",
-		Gateways: s.gatewaysView(r, "", ""),
-	})
-}
-
-func (s *Server) handleGatewaysRegenerate(w http.ResponseWriter, r *http.Request) {
-	if s.gw == nil {
-		http.Error(w, "gateway credentials unavailable", http.StatusNotFound)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad form", http.StatusBadRequest)
-		return
-	}
-	which := r.FormValue("which")
-	var notice string
-	switch which {
-	case "s3":
-		if _, _, err := s.gw.RegenerateS3(); err != nil {
-			s.renderGatewayError(w, r, "Could not save S3 keys: "+err.Error())
-			return
-		}
-		notice = "New S3 keys generated. Copy the secret now — it is shown below."
-	case "webdav":
-		if _, err := s.gw.RegenerateWebDAV(); err != nil {
-			s.renderGatewayError(w, r, "Could not save WebDAV password: "+err.Error())
-			return
-		}
-		notice = "New WebDAV app password generated. Copy it now."
-	default:
-		http.Error(w, "unknown target", http.StatusBadRequest)
-		return
-	}
-	s.render(w, "gateways", pageData{
-		User:     userFromCtx(r.Context()),
-		Title:    "Connections",
-		Gateways: s.gatewaysView(r, which, notice),
-	})
-}
-
-func (s *Server) handleGatewaysClear(w http.ResponseWriter, r *http.Request) {
-	if s.gw == nil {
-		http.Error(w, "gateway credentials unavailable", http.StatusNotFound)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad form", http.StatusBadRequest)
-		return
-	}
-	var notice string
-	switch r.FormValue("which") {
-	case "s3":
-		_ = s.gw.ClearS3()
-		notice = "S3 keys cleared. The S3 endpoint will reject all requests until you generate new keys."
-	case "webdav":
-		_ = s.gw.ClearWebDAV()
-		notice = "WebDAV app password cleared. The main login password still works for WebDAV."
-	default:
-		http.Error(w, "unknown target", http.StatusBadRequest)
-		return
-	}
-	s.render(w, "gateways", pageData{
-		User:     userFromCtx(r.Context()),
-		Title:    "Connections",
-		Gateways: s.gatewaysView(r, "", notice),
-	})
-}
-
-func (s *Server) handleEncryptionToggle(w http.ResponseWriter, r *http.Request) {
-	if s.crypt == nil {
-		http.Error(w, "encryption unavailable", http.StatusNotFound)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad form", http.StatusBadRequest)
-		return
-	}
-	enable := r.FormValue("enable") == "true"
-	if err := s.crypt.SetEnabled(enable); err != nil {
-		s.renderGatewayError(w, r, "Could not save encryption setting: "+err.Error())
-		return
-	}
-	notice := "Encryption of new uploads is now OFF. Already-encrypted items can still be opened."
-	if enable {
-		notice = "Encryption is ON. New uploads are encrypted before leaving your machine; Google only stores opaque video. Back up your key below."
-	}
-	s.render(w, "gateways", pageData{
-		User:     userFromCtx(r.Context()),
-		Title:    "Connections",
-		Gateways: s.gatewaysView(r, "", notice),
-	})
-}
-
 func (s *Server) handleEncryptionKeyBackup(w http.ResponseWriter, r *http.Request) {
 	if s.crypt == nil {
 		http.Error(w, "encryption unavailable", http.StatusNotFound)
@@ -195,11 +99,36 @@ func (s *Server) handleEncryptionKeyBackup(w http.ResponseWriter, r *http.Reques
 	_, _ = w.Write(key)
 }
 
-func (s *Server) renderGatewayError(w http.ResponseWriter, r *http.Request, msg string) {
-	s.render(w, "gateways", pageData{
-		User:     userFromCtx(r.Context()),
-		Title:    "Connections",
-		Error:    msg,
-		Gateways: s.gatewaysView(r, "", ""),
-	})
+// gatewaysView models the Connections settings page.
+type gatewaysView struct {
+	S3Enabled   bool
+	S3Endpoint  string
+	S3Region    string
+	S3Bucket    string
+	S3AccessKey string
+	S3SecretKey string
+	HasS3Keys   bool
+
+	WebDAVEnabled  bool
+	WebDAVEndpoint string
+	WebDAVUsername string
+	WebDAVPassword string
+	HasWebDAVPass  bool
+
+	EncryptionAvailable   bool
+	EncryptionEnabled     bool
+	EncryptionFingerprint string
+	EncryptionKeyCount    int
+	EncryptionKeys        []gwKeyInfo
+
+	// JustGenerated is "s3" or "webdav" right after a regenerate, so the page
+	// can reveal the new secret with a "save this now" prompt. Empty otherwise.
+	JustGenerated string
+	Notice        string
+}
+
+// gwKeyInfo is a loaded encryption key shown on the Connections page.
+type gwKeyInfo struct {
+	Fingerprint string
+	Active      bool
 }

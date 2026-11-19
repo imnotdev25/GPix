@@ -98,7 +98,10 @@ export default function Layout({
           <img className="brand-logo" src="/gpix.svg" alt="" />
           <div>
             <strong>gpix</strong>
-            <div className="muted small">Media server</div>
+            {/* The running build, so you can tell an update has landed. */}
+            <div className="muted small num" title={me.version ? `gpix ${me.version}` : undefined}>
+              {me.version || "Media server"}
+            </div>
           </div>
         </div>
         {primary.map(navLink)}
@@ -149,6 +152,11 @@ export default function Layout({
             <Icon name="logout" size={16} />
             {signOutLabel}
           </button>
+          {me.version && (
+            <p className="muted small num" style={{ textAlign: "center", margin: "14px 0 0" }}>
+              gpix {me.version}
+            </p>
+          )}
         </Modal>
       )}
     </div>

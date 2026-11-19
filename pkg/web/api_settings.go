@@ -45,14 +45,18 @@ func (s *Server) apiAuthMe(w http.ResponseWriter, r *http.Request) {
 			user = u
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	me := map[string]any{
 		"user":          user,
 		"signedIn":      user != "",
 		"passwordLogin": s.cfg.PasswordLoginEnabled(),
 		"logtoEnabled":  s.cfg.LogtoEnabled(),
 		"signupOpen":    s.signupOpen(r),
 		"firstRun":      s.users != nil && s.accountCount(r) == 0,
-	})
+	}
+	if user != "" {
+		me["version"] = AppVersion() // shown in the sidebar; signed-in users only
+	}
+	writeJSON(w, http.StatusOK, me)
 }
 
 // apiAuthLogin signs in with email + password and sets the session cookie.

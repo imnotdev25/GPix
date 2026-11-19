@@ -122,6 +122,7 @@ GPIX_SIGNUP_ALLOWLIST=you@example.com
 
 - `gpix-web.conf` is no longer read. If one exists, gpix logs a warning at startup that lists the variables to move into `.env`. The `-config` flag is deprecated.
 - `GPIX_USERNAME` and `GPIX_PASSWORD_HASH`, if set, are imported once as an account (sign in with that username), after which you can remove both lines.
+- The old server-rendered pages are gone. Their addresses (`/browse`, `/view/…`, `/settings/…`) redirect to the matching page of the web app.
 
 Runtime state lives in `GPIX_DATA_DIR` (default: the working directory): `secret.key`, `gateways.json`, `encryption.key`, the `*.db` files (accounts, users, shares, uploads, albums, imports, API tokens, and a `cache_<id>.db` listing snapshot per linked account), and `gpix-thumbcache/`. The **Telegram bot is off by default**: `gpix` (or `-mode all`) runs just the web UI and gateways unless `TG_BOT_ENABLED=true`.
 
@@ -134,7 +135,7 @@ On first run gpix generates a 32-byte `secret.key` in the data folder (used to s
 - **Albums and tags** — stored by gpix (`albums.db`), not synced with albums in Google Photos.
 - **Select** — click, shift-click a range, or long-press on touch screens; then share, add to an album, tag, download, or move to trash.
 - **Photo view** — full-screen viewer with zoom, swipe and keyboard navigation, a details panel with tags, and download of the original.
-- **Video view** — videos play in the viewer. The older `/view/{key}` page adds HLS adaptive streaming with a quality picker and seeking, and a signed stream URL you can open in VLC.
+- **Video view** — videos stream with HLS: adaptive quality, a manual quality picker, proper seeking, and a **Stream link** button that copies a signed URL to open in VLC. Encrypted videos play from the decrypted original.
 - **Upload** — drag-and-drop multi-file, with progress for each file
 - **Delete** — move items to Google Photos trash from the UI. **Delete gpix uploads** (in Connections) removes only what gpix itself uploaded, after showing how many items it will remove.
 - **Disguised files** show with file icon + extension badge instead of a video player
@@ -328,7 +329,7 @@ Disguising hides *what kind* of file something is, but the bytes are still there
 
 Web UI → **Connections** → **Media encryption** → *Turn encryption on*. (Or seed it with `GPIX_ENCRYPT_UPLOADS=true` in `.env` for the first run.) From then on, every new upload is encrypted. The panel shows a short **key fingerprint** so you can confirm which key is active, and a **Download key backup** button.
 
-> **Back up `encryption.key`.** If you lose it, everything encrypted with it is **permanently unreadable** — gpix can't recover it and neither can Google. Use the backup button (or copy the file) and store it somewhere safe. Restoring it later (drop it back next to `secret.key`) restores access; the fingerprint lets you verify it's the right one.
+> **Back up `encryption.key`.** If you lose it, everything encrypted with it is **permanently unreadable** — gpix can't recover it and neither can Google. Use the backup button (or copy the file) and store it somewhere safe. Restoring it later (**Import key backup** in Connections, or drop the file back next to `secret.key`) restores access; the fingerprint lets you verify it's the right one.
 
 ### Thumbnails for encrypted items
 
@@ -431,6 +432,7 @@ Tokens live in `api-tokens.db` (git-ignored, in the data folder).
 | `GET /api/v1/media/timeline` | Item count per month, newest first: `{months: [{year, month, count}], total}`. Group by `tz` (an IANA zone) or `tzOffset` (minutes east of UTC); `album` / `tag` narrow it. |
 | `GET /api/v1/media/{key}/thumb?size=` | Thumbnail (rendered by gpix for disguised items). `size` ∈ 64/128/256/512/1024/2048. While gpix is still rendering one, it returns a 1×1 placeholder with `X-Thumb-Pending: 1`; ask again shortly. |
 | `GET /api/v1/media/{key}/original?download=1` | Decrypted original bytes; `download=1` forces an attachment. |
+| `GET /api/v1/media/{key}/stream` | Signed playback URLs: `hls` (adaptive HLS playlist), `hlsAbsolute` (for VLC) and `raw` (the original), valid for `GPIX_STREAM_TOKEN_TTL_MIN`. |
 | `POST /api/v1/upload` | Multipart (`files`, optional `quality`, optional `mtime` in ms before each file), uploaded through the encryption/disguise path. |
 | `DELETE /api/v1/media/{key}` | Move an item to trash. |
 | `POST /api/v1/media/delete` | Move up to 5000 items to trash in one request: `{keys}` → `{deleted, failed}`. |
@@ -439,11 +441,11 @@ Tokens live in `api-tokens.db` (git-ignored, in the data folder).
 | `POST /api/v1/albums/{id}/items` · `POST /api/v1/albums/{id}/items/remove` | Add / remove items: `{keys}`. |
 | `GET /api/v1/tags` · `POST /api/v1/tags/add` · `POST /api/v1/tags/remove` | List tags with counts / add or remove tags: `{keys, tags}` → each key's tags afterwards. |
 | `GET /api/v1/shares` · `POST /api/v1/shares` · `DELETE /api/v1/shares/{token}` | List / create / revoke share links. Shares include `directUrl` when a direct download link is available. |
-| `GET /api/v1/accounts` · `POST /api/v1/accounts/{id}/switch` | List linked Google accounts / switch the active one. |
+| `GET /api/v1/accounts` · `POST /api/v1/accounts` · `POST /api/v1/accounts/{id}` · `DELETE /api/v1/accounts/{id}` · `POST /api/v1/accounts/{id}/switch` | List / link (`{label, authData}`) / rename (`{label}`) / unlink (not the active one) / switch the active Google account. |
 | `GET /api/v1/import/status` · `POST /api/v1/import/start` · `POST /api/v1/import/google-start` · `POST /api/v1/import/stop` | Drive the importers. `google-start` takes `{accountId}` (a linked account) or `{authData}`, plus `workers`. |
 | `GET /api/v1/gpix-uploads/summary` · `POST /api/v1/gpix-uploads/delete` | Count what gpix uploaded / move it to trash (the delete repeats the reviewed account and count). |
 
-The web UI also uses `/api/v1/auth/*` (`me`, `login`, `logout`, `signup`; `me` reports `signupOpen` and `firstRun`), `/api/v1/gateways*`, `/api/v1/encryption/toggle`, `/api/v1/tokens*` and `/api/v1/delete-all`.
+The web UI also uses `/api/v1/auth/*` (`me`, `login`, `logout`, `signup`; `me` reports `signupOpen` and `firstRun`), `/api/v1/gateways*`, `/api/v1/encryption/toggle`, `/api/v1/encryption/key-backup` (download), `/api/v1/encryption/keys` (import key backups, multipart field `keys`), `/api/v1/tokens*` and `/api/v1/delete-all`. The public share page loads `/s/{token}/info` and unlocks with `POST /s/{token}/unlock` (`{password}`).
 
 **Quick check:**
 
@@ -489,7 +491,7 @@ GPIX_LOG_FORMAT=text
 - **Levels:** at `info` you see sign-ins and other changes, client errors, slow requests (over 10 seconds; downloads and streams excluded) and server errors. Routine page and thumbnail loads only appear at `debug`.
 - **Library listing:** a line when the first listing starts, "still listing" every 15 seconds while it runs, the item count when it finishes, and a warning if it fails.
 - **Thumbnails:** failed renders are warnings, at most 5 a minute; the rest go to `debug`.
-- **Startup:** one line with the listen address, data folder, account limit, thumbnail generation, and whether S3 and WebDAV are on.
+- **Startup:** one line with the version (also shown in the web app's sidebar), the listen address, data folder, account limit, thumbnail generation, and whether S3 and WebDAV are on.
 
 ---
 

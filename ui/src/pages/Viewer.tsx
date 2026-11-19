@@ -5,6 +5,7 @@ import type { MediaItem } from "../types";
 import Icon from "../components/Icon";
 import ShareDialog from "../components/ShareDialog";
 import { TagDialog } from "../components/CollectionDialogs";
+import VideoPlayer from "../components/VideoPlayer";
 import { errMsg, useConfirm, useToast } from "../components/feedback";
 import { formatBytes, formatDateTime, parseDate } from "../format";
 
@@ -661,7 +662,7 @@ export default function Viewer({
                 onError={onImgError}
               />
             ) : item.class === "video" ? (
-              <video src={api.originalUrl(item.key)} poster={api.thumbUrl(item, 1024)} controls playsInline />
+              <VideoPlayer item={item} />
             ) : (
               <div className="viewer-file">
                 <Icon name={failedBoth ? "photos" : "file"} size={56} />

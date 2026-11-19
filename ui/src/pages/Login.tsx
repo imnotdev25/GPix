@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import * as api from "../api";
 import type { Me } from "../types";
 import { errMsg } from "../components/feedback";
@@ -14,7 +14,9 @@ export default function Login({ me, onSignedIn }: { me: Me; onSignedIn: () => vo
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  // A failed single sign-on comes back as /signin?error=…
+  const [params] = useSearchParams();
+  const [error, setError] = useState(params.get("error") ?? "");
 
   const signup = mode === "signup";
 
@@ -112,6 +114,8 @@ export default function Login({ me, onSignedIn }: { me: Me; onSignedIn: () => vo
             )}
           </form>
         )}
+
+        {error && !me.passwordLogin && <div className="banner banner-err">{error}</div>}
 
         {me.logtoEnabled && (
           <>

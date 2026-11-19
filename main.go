@@ -432,6 +432,7 @@ func startWeb(ctx context.Context, log *slog.Logger, auth, cfgPath, secretPath, 
 	}
 
 	log.Info("gpix web started",
+		"version", web.AppVersion(),
 		"listen", cfg.Listen,
 		"profile", profileName,
 		"data_dir", cfg.DataDir,
