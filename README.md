@@ -496,10 +496,10 @@ GPIX_LOG_FORMAT=text
 ## Build for Linux
 
 ```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o gpix .
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags nodynamic -ldflags="-s -w" -o gpix .
 ```
 
-Fully static (the SQLite and image dependencies are pure Go), ~25 MB stripped. Drop the binary on any Linux box with `.env` next to it; gpix creates its state files (`secret.key`, `gateways.json`, `encryption.key`, the `*.db` files, `gpix-thumbcache/`) on first run.
+Fully static (the SQLite and image dependencies are pure Go), ~25 MB stripped. Keep `-tags nodynamic`: without it the HEIC decoder links against glibc, and the binary won't start on musl systems such as Alpine. Drop the binary on any Linux box with `.env` next to it; gpix creates its state files (`secret.key`, `gateways.json`, `encryption.key`, the `*.db` files, `gpix-thumbcache/`) on first run.
 
 ---
 

@@ -39,7 +39,9 @@ jobs:
             export GOOS="${t%/*}" GOARCH="${t#*/}" CGO_ENABLED=0
             bin="gpix"; [ "$GOOS" = "windows" ] && bin="gpix.exe"
             echo "→ $GOOS/$GOARCH"
-            go build -trimpath -ldflags "-s -w" -o "$bin" .
+            # nodynamic: keep the HEIC decoder from linking glibc via purego,
+            # so the Linux binaries are static and run on any distro.
+            go build -tags nodynamic -trimpath -ldflags "-s -w" -o "$bin" .
             name="gpix_${VERSION}_${GOOS}_${GOARCH}"
             if [ "$GOOS" = "windows" ]; then
               zip -q "dist/${name}.zip" "$bin" README.md LICENSE
