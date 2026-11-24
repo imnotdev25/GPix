@@ -47,8 +47,10 @@ type PageResult struct {
 	Raw int
 }
 
-func (c *Client) ListPage(ctx context.Context, resumeToken string) (PageResult, error) {
-	body, err := buildLibStateRequest(resumeToken)
+// ListPage returns one page of the library (Google sends up to 500 items a
+// page). pageToken is the previous page's NextToken; empty starts at the top.
+func (c *Client) ListPage(ctx context.Context, pageToken string) (PageResult, error) {
+	body, err := buildLibRequest("", pageToken)
 	if err != nil {
 		return PageResult{}, fmt.Errorf("gpmc list-page: build request: %w", err)
 	}
@@ -65,8 +67,11 @@ func (c *Client) ListPage(ctx context.Context, resumeToken string) (PageResult, 
 
 	raw := resp.GetBody().GetItems()
 	items := decodeMediaItems(raw)
-	next := resp.GetBody().GetSyncToken()
-	if next == resumeToken {
+	// Field 1.1 continues the listing; it is empty on the last page. (Field
+	// 1.6, the sync token, only asks for changes, so following it stopped
+	// the listing after the first page.)
+	next, _ := libReplyTokens(respBytes)
+	if next == pageToken {
 		next = ""
 	}
 	return PageResult{Items: items, NextToken: next, Raw: len(raw)}, nil
@@ -108,9 +113,9 @@ func (c *Client) list(ctx context.Context, n int, progress func(ListProgress)) (
 				added++
 			}
 		}
-		// The token is a sync token: once the listing has caught up, Google
-		// returns empty pages with a fresh token forever. Stop at the first
-		// page that brings nothing, or only items we already have.
+		// Google sends up to 500 items a page and an empty NextToken on the
+		// last one. The other checks are a safety net in case a page ever
+		// brings nothing, or only items we already have.
 		done := page.NextToken == "" || page.Raw == 0 || (added == 0 && len(page.Items) > 0) ||
 			(n > 0 && len(all) >= n*2)
 		if progress != nil {

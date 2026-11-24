@@ -3,7 +3,9 @@ package gpmc
 import (
 	"encoding/base64"
 	"errors"
-	"fmt"
+	"slices"
+
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 const libStateRequestBlobB64 = "CogJCqsCClkKABoAIgAqDAoAEgAaACIAKgA6ADIAOgISAHoAggEAigEAmgEAogEAqgEGKgIaADIAygEA8gECEgD6AQCCAgCKAgIKAJICAKICAKoCALICALoCAMICAMoCACpSEhgSChoCEgAiBBIAIgAiBBICEAEqAhIAMAEaGhIEGgAiABoIEgAaBBABGgAiACoEEgIQAToAIgQSAhIAKhQKEBIEGgAiABoIEgAaBBABGgAYAUIASjASABoECgASACImCiQaHAoaCggqAgoAMgA6ABIAGgwKCCoCCgAyADoAEgAiBAoCEgBaDBIAGgAiBhIECAEQAmIAcgwSABoAIgYSBAgBEAJ6BAoAIgCKAQQKACIAmgEMEgAaACIGEgQIARACqgECCgCyAQC6AQDCAQAShQEKKxIAGgAiACoAMgwKABIAGgAiACoAOgA6AEIAUgBiAGoEEgAaAHoCCgCSAQAiAgoASgBaDAoKCgAiACoAMgBKAHIkCiIKHgoAEggSBgoCCgAaABoQIgYKAgoAGgAqBgoCCgAaABIAigEAkgEGCgASAgoAogEGEgQKABIAsgEAugEAwgEAGsgBEgAaYhIAGgA6AEIAcgIKAIIBAIoBAhIAkgEAmgEAogEAqgEAsgEAugEA2gEGCgASAgoA6gEA8gEA+gEAggIAkgIAqgIAsgIAugIAygIA2gICCgDqAgQKAgoA8gIGCgASABoA+gIAIgwSABoCCgAiACoCCgA6AGIAagByHAoAEgwKABICCgAaACICCgAaCgoAEgIKABoAIgB6AIIBAgoAkgEAmgEUIgISADIEEgAaADoEEgAaAEIASgCiAQCyAQDCAQDKAQDSAQAyADgCSioKBhIECgASABIEGgIQARoCEgAiADoCCgBCCggCEgYBAgMFBgdKAFoCCgBYAVgCWAZiDBIECgASABoCCgAiAGoAegQaAggBkgE76qiliAU1CjMKMSACIAEgBiAIIAogDyASIA0gESATIA4gFCgGMAI4AUACWANgAWgDeAGAAQGIAQGQAQKaAS4KBAoAEgASDAgBCAIIBAgGCAUIBxoECgASACoECgASADICCgA6BAoAEgBCAgoAogGEAQgBEgAafgpHdHlwZS5nb29nbGVhcGlzLmNvbS9waG90b3MucHJpbnRpbmcuY2xpZW50LlByaW50aW5nUHJvbW90aW9uU3luY09wdGlvbnMSMwoxIAIgASAGIAggCiAPIBIgDSARIBMgDiAUKAYwAjgBQAJYA2ABaAN4AYABAYgBAZABAqoBlAESCBICIgAiACoAGggSAggBIgISACoCCgAyBgoAEgIKADorCAISJAEHCAkKDQ4PERMUFhctLi8wMToGGDI2Nzs+P0BBODk8R0JFRBoBAUIgGg4KCgoIEgIIASICEgAaACICCgAqCgoIEgIIASICEgBKAgoAUhIKAgoAGgAqADICCgA6AEoAUgBaAGIAagByAIIBAgoAsgEZCAESFTEwNDA0ODAyOTM1ODQ5ODE2MjM4OcoBCgoGCgQKAgoAEgDSAQASDAoICgYKAgoAEgASAA=="
@@ -18,107 +20,101 @@ func init() {
 	libStateRequestBlob = b
 }
 
-func buildLibStateRequest(syncToken string) ([]byte, error) {
-	if syncToken == "" {
-		out := make([]byte, len(libStateRequestBlob))
-		copy(out, libStateRequestBlob)
-		return out, nil
-	}
+var errBadBlob = errors.New("gpmc: malformed library request")
 
-	pos, err := findSyncTokenSlot(libStateRequestBlob)
-	if err != nil {
-		return nil, err
-	}
-
-	tokenBytes := []byte(syncToken)
-	tokenLen := encodeVarint(uint64(len(tokenBytes)))
-
-	out := make([]byte, 0, len(libStateRequestBlob)+len(tokenBytes)+8)
-	out = append(out, libStateRequestBlob[:pos+1]...)
-	out = append(out, tokenLen...)
-	out = append(out, tokenBytes...)
-	out = append(out, libStateRequestBlob[pos+2:]...)
-
-	tokenGrowth := len(tokenLen) - 1 + len(tokenBytes)
-	if err := patchOuterLengths(out, pos, tokenGrowth); err != nil {
-		return nil, err
+// buildLibRequest returns the library request with pageToken (the previous
+// reply's field 1.1, which continues the listing) in field 1.4 and
+// stateToken (field 1.6, which asks only for changes) in field 1.6. With
+// both empty it is the first-page request, unchanged.
+func buildLibRequest(stateToken, pageToken string) ([]byte, error) {
+	top := libStateRequestBlob
+	var out []byte
+	for len(top) > 0 {
+		num, wt, n := protowire.ConsumeTag(top)
+		if n < 0 {
+			return nil, errBadBlob
+		}
+		vn := protowire.ConsumeFieldValue(num, wt, top[n:])
+		if vn < 0 {
+			return nil, errBadBlob
+		}
+		if num == 1 && wt == protowire.BytesType {
+			inner, _ := protowire.ConsumeBytes(top[n:])
+			patched, err := setStringFields(inner, map[protowire.Number]string{4: pageToken, 6: stateToken})
+			if err != nil {
+				return nil, err
+			}
+			out = protowire.AppendTag(out, 1, protowire.BytesType)
+			out = protowire.AppendBytes(out, patched)
+		} else {
+			out = append(out, top[:n+vn]...)
+		}
+		top = top[n+vn:]
 	}
 	return out, nil
 }
 
-func findSyncTokenSlot(blob []byte) (int, error) {
-	if len(blob) < 6 {
-		return 0, errors.New("gpmc: blob too short")
-	}
-	if blob[0] != 0x0a {
-		return 0, errors.New("gpmc: blob does not start with field 1 tag")
-	}
-	outerLen, outerLenSize := decodeVarint(blob[1:])
-	innerStart := 1 + outerLenSize
-	innerEnd := innerStart + int(outerLen)
-	if innerEnd > len(blob) {
-		return 0, errors.New("gpmc: outer length out of bounds")
-	}
-	pos := innerStart
-	for pos < innerEnd {
-		if blob[pos] == 0x32 && pos+1 < innerEnd && blob[pos+1] == 0x00 {
-			return pos, nil
+// setStringFields replaces (or adds, when non-empty) string fields of msg.
+func setStringFields(msg []byte, set map[protowire.Number]string) ([]byte, error) {
+	var out []byte
+	done := map[protowire.Number]bool{}
+	for len(msg) > 0 {
+		num, wt, n := protowire.ConsumeTag(msg)
+		if n < 0 {
+			return nil, errBadBlob
 		}
-		tag := blob[pos]
-		wireType := tag & 0x07
-		pos++
-		switch wireType {
-		case 0:
-			_, sz := decodeVarint(blob[pos:])
-			pos += sz
-		case 2:
-			l, sz := decodeVarint(blob[pos:])
-			pos += sz + int(l)
-		default:
-			return 0, fmt.Errorf("gpmc: unsupported wire type %d at %d", wireType, pos-1)
+		vn := protowire.ConsumeFieldValue(num, wt, msg[n:])
+		if vn < 0 {
+			return nil, errBadBlob
+		}
+		if v, ok := set[num]; ok && wt == protowire.BytesType {
+			if !done[num] {
+				out = protowire.AppendTag(out, num, protowire.BytesType)
+				out = protowire.AppendString(out, v)
+				done[num] = true
+			}
+		} else {
+			out = append(out, msg[:n+vn]...)
+		}
+		msg = msg[n+vn:]
+	}
+	var add []protowire.Number
+	for num, v := range set {
+		if !done[num] && v != "" {
+			add = append(add, num)
 		}
 	}
-	return 0, errors.New("gpmc: sync_token slot not found in blob")
+	slices.Sort(add)
+	for _, num := range add {
+		out = protowire.AppendTag(out, num, protowire.BytesType)
+		out = protowire.AppendString(out, set[num])
+	}
+	return out, nil
 }
 
-func patchOuterLengths(blob []byte, syncTokenPos, growth int) error {
-	if blob[0] != 0x0a {
-		return errors.New("gpmc: blob outer tag changed")
-	}
-	oldLen, oldLenSize := decodeVarint(blob[1:])
-	newLen := int(oldLen) + growth
-	newLenBytes := encodeVarint(uint64(newLen))
-	if len(newLenBytes) != oldLenSize {
-		return errors.New("gpmc: outer length size changed; not yet supported")
-	}
-	copy(blob[1:1+oldLenSize], newLenBytes)
-	return nil
+// libReplyTokens reads the continuation token (field 1.1) and the sync token
+// (field 1.6) from a library reply.
+func libReplyTokens(resp []byte) (pageToken, stateToken string) {
+	body := protoField(resp, 1)
+	return string(protoField(body, 1)), string(protoField(body, 6))
 }
 
-func decodeVarint(b []byte) (uint64, int) {
-	var x uint64
-	var s uint
-	for i, c := range b {
-		if i >= 10 {
-			return 0, 0
+// protoField returns the last value of bytes field num in msg.
+func protoField(msg []byte, num protowire.Number) []byte {
+	var v []byte
+	for len(msg) > 0 {
+		n2, wt, n := protowire.ConsumeTag(msg)
+		if n < 0 {
+			return v
 		}
-		if c < 0x80 {
-			return x | uint64(c)<<s, i + 1
+		vn := protowire.ConsumeFieldValue(n2, wt, msg[n:])
+		if vn < 0 {
+			return v
 		}
-		x |= uint64(c&0x7f) << s
-		s += 7
+		if n2 == num && wt == protowire.BytesType {
+			v, _ = protowire.ConsumeBytes(msg[n:])
+		}
+		msg = msg[n+vn:]
 	}
-	return 0, 0
-}
-
-func encodeVarint(x uint64) []byte {
-	var b [10]byte
-	n := 0
-	for x >= 0x80 {
-		b[n] = byte(x) | 0x80
-		x >>= 7
-		n++
-	}
-	b[n] = byte(x)
-	return b[:n+1]
+	return v
 }
